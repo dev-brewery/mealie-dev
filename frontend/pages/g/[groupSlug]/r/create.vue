@@ -60,7 +60,9 @@ export default defineNuxtComponent({
     });
 
     const appInfo = useAppInfo();
-    const enableOpenAIImages = computed(() => appInfo.value?.enableOpenaiImageServices);
+    // BUGFIX: Uses aiImageServicesEnabled field to check if any AI provider is configured
+    // Previously used undefined field names, now matches backend API response
+    const enableAIImages = computed(() => appInfo.value?.aiImageServicesEnabled ?? false);
 
     const subpages = computed<MenuItem[]>(() => [
       {
@@ -79,10 +81,20 @@ export default defineNuxtComponent({
         value: "html",
       },
       {
-        icon: $globals.icons.fileImage,
-        text: i18n.t("recipe.create-from-images"),
+        icon: $globals.icons.robot,
+        text: i18n.t("recipe.create-from-images-ai"),
         value: "image",
-        hide: !enableOpenAIImages.value,
+        hide: false, // Always show, but will show setup prompt if not configured
+        disabled: !enableAIImages.value,
+        tooltip: enableAIImages.value ? null : i18n.t("recipe.ai-scanning-setup-required"),
+      },
+      {
+        icon: $globals.icons.textScan,
+        text: i18n.t("recipe.create-from-image-ocr"),
+        value: "ocr",
+        hide: false,
+        disabled: false,
+        tooltip: i18n.t("recipe.ocr-scanning-privacy-mode"),
       },
       {
         icon: $globals.icons.edit,
