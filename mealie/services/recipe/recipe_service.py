@@ -126,6 +126,9 @@ class RecipeService(RecipeServiceBase):
         Recipe Schema class with the appropriate defaults set. Recipes should not be created
         elsewhere to avoid conflicts.
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
         additional_attrs = additional_attrs or {}
         additional_attrs["name"] = name
         additional_attrs["user_id"] = self.user.id
@@ -136,10 +139,18 @@ class RecipeService(RecipeServiceBase):
             for i in range(len(additional_attrs.get("tags", []))):
                 additional_attrs["tags"][i]["group_id"] = self.user.group_id
 
+        # DEBUG: Check what ingredients we have before the default logic
+        ingredients = additional_attrs.get("recipe_ingredient")
+        logger.info(f"DEBUG FACTORY: recipe_ingredient = {ingredients}")
+        logger.info(f"DEBUG FACTORY: type = {type(ingredients)}, len = {len(ingredients) if ingredients else 'None'}")
+
         if not additional_attrs.get("recipe_ingredient"):
+            logger.info("DEBUG FACTORY: Adding default ingredient because recipe_ingredient is empty/None")
             additional_attrs["recipe_ingredient"] = [
                 RecipeIngredient(note=self.t("recipe.recipe-defaults.ingredient-note"))
             ]
+        else:
+            logger.info(f"DEBUG FACTORY: Using provided {len(additional_attrs['recipe_ingredient'])} ingredients")
 
         if not additional_attrs.get("recipe_instructions"):
             additional_attrs["recipe_instructions"] = [RecipeStep(text=self.t("recipe.recipe-defaults.step-text"))]
@@ -293,7 +304,17 @@ class RecipeService(RecipeServiceBase):
         return recipe
 
     async def create_from_images(self, images: list[UploadFile], translate_language: str | None = None) -> Recipe:
-        openai_recipe_service = OpenAIRecipeService(self.repos, self.user, self.household, self.translator)
+        """Create a recipe from images using the configured provider chain (AI -> OCR fallback)."""
+        from mealie.services.image_scanning import ImageScanningService
+        
+        if not images:
+            raise ValueError("No images provided")
+        
+        # ADMIN SETTINGS INTEGRATION: Pass database session to ImageScanningService
+        # This was added to support admin panel AI provider configuration
+        # Previously: ImageScanningService(self.translator)
+        image_scanning_service = ImageScanningService(self.translator, self.repos.session)
+        
         with get_temporary_path() as temp_path:
             local_images: list[Path] = []
             for image in images:
@@ -301,16 +322,53 @@ class RecipeService(RecipeServiceBase):
                     shutil.copyfileobj(image.file, buffer)
                 local_images.append(temp_path.joinpath(image.filename))
 
-            recipe_data = await openai_recipe_service.build_recipe_from_images(
+            # Use the unified scanning service with fallback chain
+            recipe_data = await image_scanning_service.scan_images_for_recipe(
                 local_images, translate_language=translate_language
             )
-            recipe_data = cleaner.clean(recipe_data, self.translator)
 
             recipe = self.create_one(recipe_data)
             data_service = RecipeDataService(recipe.id)
 
             with open(local_images[0], "rb") as f:
                 data_service.write_image(f.read(), "webp")
+            return recipe
+
+    def create_from_images_ocr(self, images: list[UploadFile]) -> Recipe:
+        """Create a recipe from images using traditional OCR (Tesseract) - legacy method."""
+        try:
+            from mealie.services.ocr import OCRService
+        except ImportError as e:
+            raise ValueError("OCR services are not available. Please install pytesseract and pillow.") from e
+        
+        if not images:
+            raise ValueError("No images provided")
+        
+        ocr_service = OCRService()
+        
+        with get_temporary_path() as temp_path:
+            # Process the first image (main image)
+            first_image = images[0]
+            image_path = temp_path / first_image.filename
+            
+            with image_path.open("wb") as buffer:
+                shutil.copyfileobj(first_image.file, buffer)
+            
+            # Extract recipe using OCR
+            recipe_data = ocr_service.process_image(image_path)
+            
+            # Clean the recipe data using the same cleaner as OpenAI
+            recipe_data = cleaner.clean(recipe_data, self.translator)
+            
+            # Create the recipe
+            recipe = self.create_one(recipe_data)
+            
+            # Set the image for the recipe
+            if recipe and recipe.id:
+                data_service = RecipeDataService(recipe.id)
+                with open(image_path, "rb") as f:
+                    data_service.write_image(f.read(), "webp")
+            
             return recipe
 
     def duplicate_one(self, old_slug_or_id: str | UUID, dup_data: RecipeDuplicate) -> Recipe:

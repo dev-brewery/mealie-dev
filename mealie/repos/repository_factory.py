@@ -71,6 +71,7 @@ from mealie.schema.user.user import UserRatingOut
 from mealie.schema.user.user_passwords import PrivatePasswordResetToken
 
 from ._utils import NOT_SET, NotSet
+from .repository_admin_settings import RepositoryAdminSettings
 from .repository_generic import GroupRepositoryGeneric, HouseholdRepositoryGeneric
 from .repository_group import RepositoryGroup
 from .repository_meals import RepositoryMeals
@@ -375,3 +376,10 @@ class AllRepositories:
         return HouseholdRepositoryGeneric(
             self.session, PK_ID, GroupWebhooksModel, ReadWebhook, group_id=self.group_id, household_id=self.household_id
         )
+
+    # ================================================================
+    # Admin Settings
+    
+    @cached_property 
+    def admin_settings(self) -> RepositoryAdminSettings:
+        return RepositoryAdminSettings(self.session)

@@ -1,0 +1,432 @@
+"""
+Unified image scanning service that implements provider fallback chain.
+Primary -> Secondary -> OCR fallback
+"""
+
+import logging
+from pathlib import Path
+
+from sqlalchemy.orm import Session
+
+from mealie.core.config import get_app_settings
+from mealie.lang.providers import Translator
+
+# ADMIN SETTINGS INTEGRATION: Added to support checking AI provider configuration via admin panel
+from mealie.repos.repository_admin_settings import RepositoryAdminSettings
+from mealie.schema.recipe.recipe import CreateRecipe
+from mealie.services.scraper import cleaner
+
+logger = logging.getLogger(__name__)
+
+
+class ImageScanningService:
+    """Unified service for scanning recipe images with provider fallback"""
+    
+    def __init__(self, translator: Translator, session: Session | None = None):
+        self.translator = translator
+        self.settings = get_app_settings()
+        # ADMIN SETTINGS INTEGRATION: Added session parameter and admin settings loading
+        # This allows the service to check admin panel configuration instead of only environment variables
+        self.session = session
+        self._admin_settings = None
+        self._admin_settings_raw = None
+        if session:
+            admin_settings_repo = RepositoryAdminSettings(session)
+            self._admin_settings = admin_settings_repo.get_settings()  # AdminSettingsOut (for checking if keys are set)
+            # Also get the raw database model for accessing actual API keys
+            from mealie.db.models.admin.admin_settings import AdminSettings
+            self._admin_settings_raw = AdminSettings.get_instance(session)
+    
+    async def scan_images_for_recipe(self, images: list[Path], translate_language: str | None = None) -> CreateRecipe:
+        """
+        Scan recipe images using the configured provider chain:
+        1. Primary AI provider (if configured)
+        2. Secondary AI provider (if configured and primary fails)
+        3. OCR fallback (if enabled and all AI providers fail)
+        
+        Returns a CreateRecipe object with extracted recipe data.
+        """
+        errors = []
+        
+        # ADMIN SETTINGS INTEGRATION: Use helper methods to get provider settings
+        # This allows checking admin settings first, then falling back to environment variables
+        
+        # Try primary provider
+        primary_provider = self._get_primary_provider().lower()
+        if primary_provider != "none":
+            try:
+                logger.info(f"Attempting recipe extraction with primary provider: {primary_provider}")
+                recipe_data = await self._scan_with_provider(images, primary_provider, translate_language)
+                if recipe_data:
+                    # AI providers return CreateRecipe objects which don't need cleaning
+                    # The cleaner is for web-scraped recipes that may have messy HTML/formatting
+                    return recipe_data
+            except Exception as e:
+                error_msg = f"Primary provider {primary_provider} failed: {str(e)}"
+                logger.warning(error_msg)
+                errors.append(error_msg)
+        
+        # Try secondary provider
+        secondary_provider = self._get_secondary_provider().lower()
+        if secondary_provider != "none" and secondary_provider != primary_provider:
+            try:
+                logger.info(f"Attempting recipe extraction with secondary provider: {secondary_provider}")
+                recipe_data = await self._scan_with_provider(images, secondary_provider, translate_language)
+                if recipe_data:
+                    # AI providers return CreateRecipe objects which don't need cleaning
+                    return recipe_data
+            except Exception as e:
+                error_msg = f"Secondary provider {secondary_provider} failed: {str(e)}"
+                logger.warning(error_msg)
+                errors.append(error_msg)
+        
+        # Try OCR fallback
+        if self.get_ocr_fallback_enabled():
+            try:
+                logger.info("Attempting recipe extraction with OCR fallback")
+                recipe_data = await self._scan_with_ocr(images)
+                if recipe_data:
+                    # OCR may need cleaning but AI providers don't
+                    if isinstance(recipe_data, CreateRecipe):
+                        return recipe_data
+                    else:
+                        return cleaner.clean(recipe_data, self.translator)
+            except Exception as e:
+                error_msg = f"OCR fallback failed: {str(e)}"
+                logger.warning(error_msg)
+                errors.append(error_msg)
+        
+        # If all methods fail, raise an exception with all error details
+        error_summary = f"All image scanning methods failed. Errors: {'; '.join(errors)}"
+        raise Exception(error_summary)
+    
+    async def _scan_with_provider(self, images: list[Path], provider: str, translate_language: str | None = None) -> CreateRecipe | None:
+        """Scan images with a specific AI provider"""
+        if provider == "openai":
+            return await self._scan_with_openai(images, translate_language)
+        elif provider == "anthropic":
+            return await self._scan_with_anthropic(images, translate_language)
+        elif provider == "gemini":
+            return await self._scan_with_gemini(images, translate_language)
+        elif provider == "ollama":
+            return await self._scan_with_ollama(images, translate_language)
+        else:
+            raise ValueError(f"Unknown provider: {provider}")
+    
+    async def _scan_with_openai(self, images: list[Path], translate_language: str | None = None) -> CreateRecipe | None:
+        """Scan images using OpenAI"""
+        if not self._is_provider_enabled("openai"):
+            raise Exception("OpenAI is not configured")
+        
+        # Import here to avoid circular dependencies  
+        
+        # Create a minimal OpenAI recipe service instance
+        # Note: This is a bit of a hack - we need repos/user/household to create the service
+        # but we only need the recipe creation logic, not the database operations
+        # repos = get_repositories()  # This will need proper initialization - unused for now
+        
+        # For now, let's use the direct OpenAI service approach
+        import os
+
+        from mealie.schema.openai.recipe import OpenAIRecipe
+        from mealie.services.openai import OpenAIDataInjection, OpenAILocalImage, OpenAIService
+        
+        openai_service = OpenAIService()
+        prompt = openai_service.get_prompt(
+            "recipes.parse-recipe-image",
+            data_injections=[
+                OpenAIDataInjection(
+                    description=(
+                        "This is the JSON response schema. You must respond in valid JSON that follows this schema. "
+                        "Your payload should be as compact as possible, eliminating unncessesary whitespace. "
+                        "Any fields with default values which you do not populate should not be in the payload."
+                    ),
+                    value=OpenAIRecipe,
+                )
+            ],
+        )
+
+        openai_images = [OpenAILocalImage(filename=os.path.basename(image), path=image) for image in images]
+        message = (
+            f"Please extract the recipe from the {'images' if len(openai_images) > 1 else 'image'} provided."
+            "There should be exactly one recipe."
+        )
+
+        if translate_language:
+            message += f" Please translate the recipe to {translate_language}."
+
+        response = await openai_service.chat_completion_with_images(
+            prompt=prompt,
+            message=message,
+            images=openai_images,
+        )
+        
+        openai_recipe = OpenAIRecipe.model_validate_json(response.choices[0].message.content)
+        
+        # Convert OpenAI recipe to CreateRecipe format
+        from mealie.schema.recipe.recipe import CreateRecipe
+        from mealie.schema.recipe.recipe_ingredient import RecipeIngredient
+        from mealie.schema.recipe.recipe_notes import RecipeNote
+        from mealie.schema.recipe.recipe_step import RecipeStep
+        
+        return CreateRecipe(
+            name=openai_recipe.name,
+            description=openai_recipe.description,
+            recipe_yield=openai_recipe.recipe_yield,
+            total_time=openai_recipe.total_time,
+            prep_time=openai_recipe.prep_time,
+            perform_time=openai_recipe.perform_time,
+            recipe_ingredient=[
+                RecipeIngredient(title=ingredient.title, note=ingredient.text)
+                for ingredient in openai_recipe.ingredients
+                if ingredient.text
+            ],
+            recipe_instructions=[
+                RecipeStep(title=instruction.title, text=instruction.text)
+                for instruction in openai_recipe.instructions
+                if instruction.text
+            ],
+            notes=[RecipeNote(title=note.title or "", text=note.text) for note in openai_recipe.notes if note.text],
+        )
+    
+    async def _scan_with_anthropic(self, images: list[Path], translate_language: str | None = None) -> CreateRecipe | None:
+        """Scan images using Anthropic Claude"""
+        if not self._is_provider_enabled("anthropic"):
+            raise Exception("Anthropic is not configured")
+        
+        # TODO: Implement Anthropic vision API integration
+        raise NotImplementedError("Anthropic integration not yet implemented")
+    
+    async def _scan_with_gemini(self, images: list[Path], translate_language: str | None = None) -> CreateRecipe | None:
+        """Scan images using Google Gemini"""
+        if not self._is_provider_enabled("gemini"):
+            raise Exception("Gemini is not configured")
+        
+        try:
+            import base64
+            import json
+
+            import google.generativeai as genai
+            from PIL import Image
+        except ImportError as e:
+            raise Exception(f"Gemini dependencies not available: {e}") from e
+        
+        # Get API key from admin settings
+        api_key = self._get_gemini_api_key()
+        if not api_key:
+            raise Exception("Gemini API key not configured")
+        
+        # Configure Gemini
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(self._get_gemini_model())
+        
+        # Prepare images
+        pil_images = []
+        for image_path in images:
+            try:
+                pil_image = Image.open(image_path)
+                pil_images.append(pil_image)
+            except Exception as e:
+                logger.warning(f"Failed to load image {image_path}: {e}")
+                continue
+        
+        if not pil_images:
+            raise Exception("No valid images could be loaded")
+        
+        # Create prompt for recipe extraction
+        prompt = """
+        Please carefully analyze the recipe image(s) and extract ALL visible recipe information. Read every ingredient and instruction completely, including any text at the bottom or edges of the image.
+        
+        IMPORTANT: 
+        - List ALL ingredients exactly as written, including specific quantities and types (e.g., "almond flour" not just "flour")
+        - Include ALL instructions in the correct order
+        - Pay special attention to text that might be smaller or at the edges of the image
+        - If this appears to be a gluten-free, sugar-free, or special diet recipe, make sure to capture the specific ingredient types
+        
+        Extract the information in this exact JSON format:
+        {
+            "name": "Recipe Name",
+            "description": "Brief description of the recipe",
+            "recipe_yield": "Number of servings (as string)",
+            "total_time": "Total cooking time in minutes (as string)",
+            "prep_time": "Preparation time in minutes (as string)", 
+            "perform_time": "Cooking/baking time in minutes (as string)",
+            "ingredients": [
+                {"text": "exact ingredient with measurement as written"}
+            ],
+            "instructions": [
+                {"text": "complete step-by-step instruction as written"}
+            ],
+            "notes": [
+                {"text": "any additional notes or tips"}
+            ]
+        }
+        
+        Respond with ONLY the JSON object, no markdown formatting or additional text.
+        """
+        
+        # Add language translation if requested
+        if translate_language:
+            prompt += f"\n\nPlease translate all text to {translate_language}."
+        
+        # Generate content with images
+        try:
+            response = await model.generate_content_async([prompt] + pil_images)
+            response_text = response.text.strip()
+            
+            logger.info(f"DEBUG GEMINI RAW RESPONSE: {response_text[:500]}...")
+            
+            # Clean response text (remove markdown formatting if present)
+            if response_text.startswith("```json"):
+                response_text = response_text[7:]
+            if response_text.endswith("```"):
+                response_text = response_text[:-3]
+            response_text = response_text.strip()
+            
+            logger.info(f"DEBUG GEMINI CLEANED RESPONSE: {response_text[:500]}...")
+            
+            # Parse JSON response
+            recipe_data = json.loads(response_text)
+            
+            logger.info(f"DEBUG GEMINI PARSED JSON: ingredients={len(recipe_data.get('ingredients', []))}, name={recipe_data.get('name')}")
+            
+            # Convert to CreateRecipe format
+            from mealie.schema.recipe.recipe import RecipeIngredient, RecipeNote, RecipeStep
+            
+            ingredients_list = [
+                RecipeIngredient(note=ingredient["text"])
+                for ingredient in recipe_data.get("ingredients", [])
+                if ingredient.get("text")
+            ]
+            instructions_list = [
+                RecipeStep(text=instruction["text"])
+                for instruction in recipe_data.get("instructions", [])
+                if instruction.get("text")
+            ]
+            
+            logger.info(f"DEBUG GEMINI CREATERECIPE: {len(ingredients_list)} ingredients, {len(instructions_list)} instructions")
+            for i, ing in enumerate(ingredients_list[:3]):
+                logger.info(f"DEBUG INGREDIENT {i+1}: {ing.note}")
+            
+            return CreateRecipe(
+                name=recipe_data.get("name", "Untitled Recipe"),
+                description=recipe_data.get("description", ""),
+                recipe_yield=recipe_data.get("recipe_yield", "1"),
+                total_time=recipe_data.get("total_time"),
+                prep_time=recipe_data.get("prep_time"),
+                perform_time=recipe_data.get("perform_time"),
+                recipe_ingredient=ingredients_list,
+                recipe_instructions=instructions_list,
+                notes=[
+                    RecipeNote(text=note["text"])
+                    for note in recipe_data.get("notes", [])
+                    if note.get("text")
+                ]
+            )
+            
+        except json.JSONDecodeError as e:
+            raise Exception(f"Failed to parse Gemini response as JSON: {e}") from e
+        except Exception as e:
+            raise Exception(f"Gemini API request failed: {e}") from e
+    
+    async def _scan_with_ollama(self, images: list[Path], translate_language: str | None = None) -> CreateRecipe | None:
+        """Scan images using Ollama"""
+        if not self._is_provider_enabled("ollama"):
+            raise Exception("Ollama is not configured")
+        
+        # TODO: Implement Ollama vision API integration
+        raise NotImplementedError("Ollama integration not yet implemented")
+    
+    async def _scan_with_ocr(self, images: list[Path]) -> CreateRecipe | None:
+        """Scan images using traditional OCR"""
+        try:
+            from mealie.services.ocr import OCRService
+        except ImportError as e:
+            raise Exception("OCR services are not available. Please install pytesseract and pillow.") from e
+        
+        if not images:
+            raise Exception("No images provided for OCR scanning")
+        
+        ocr_service = OCRService()
+        # Use the first image for OCR scanning
+        return ocr_service.process_image(images[0])
+    
+    def get_available_providers(self) -> dict[str, bool]:
+        """Get a dict of available providers and their status"""
+        return {
+            "openai": self._is_provider_enabled("openai"),
+            "anthropic": self._is_provider_enabled("anthropic"),
+            "gemini": self._is_provider_enabled("gemini"),
+            "ollama": self._is_provider_enabled("ollama"),
+            "ocr": True,  # OCR is always available if tesseract is installed
+        }
+    
+    def is_any_provider_configured(self) -> bool:
+        """Check if any AI provider is configured"""
+        return any([
+            self._is_provider_enabled("openai"),
+            self._is_provider_enabled("anthropic"),
+            self._is_provider_enabled("gemini"),
+            self._is_provider_enabled("ollama"),
+        ])
+    
+    # ADMIN SETTINGS INTEGRATION: The following helper methods were added to support
+    # admin panel configuration while maintaining backward compatibility with environment variables
+    
+    def _get_primary_provider(self) -> str:
+        """Get the primary provider from admin settings or fallback to legacy settings"""
+        if self._admin_settings:
+            return self._admin_settings.image_scanning_primary_provider or "none"
+        return self.settings.IMAGE_SCANNING_PRIMARY_PROVIDER
+    
+    def _get_secondary_provider(self) -> str:
+        """Get the secondary provider from admin settings or fallback to legacy settings"""
+        if self._admin_settings:
+            return self._admin_settings.image_scanning_secondary_provider or "none"
+        return self.settings.IMAGE_SCANNING_SECONDARY_PROVIDER
+    
+    def get_ocr_fallback_enabled(self) -> bool:
+        """Get OCR fallback setting from admin settings or fallback to legacy settings
+        PUBLIC METHOD: Used by recipe routes to check OCR availability
+        """
+        if self._admin_settings:
+            return self._admin_settings.image_scanning_enable_ocr_fallback
+        return self.settings.IMAGE_SCANNING_ENABLE_OCR_FALLBACK
+    
+    def _is_provider_enabled(self, provider: str) -> bool:
+        """Check if a specific provider is enabled (has API key configured)
+        CHANGED: Now checks admin settings first, then falls back to environment variables
+        """
+        # First check admin settings if available
+        if self._admin_settings:
+            if provider == "openai":
+                return self._admin_settings.openai_api_key_set
+            elif provider == "anthropic":
+                return self._admin_settings.anthropic_api_key_set
+            elif provider == "gemini":
+                return self._admin_settings.gemini_api_key_set
+            elif provider == "ollama":
+                # Ollama doesn't need an API key, just check if base URL is configured
+                return bool(self._admin_settings.ollama_base_url)
+        
+        # Fallback to legacy settings for backward compatibility
+        if provider == "openai":
+            return self.settings.OPENAI_ENABLED
+        elif provider == "anthropic":
+            return self.settings.ANTHROPIC_ENABLED
+        elif provider == "gemini":
+            return self.settings.GEMINI_ENABLED
+        elif provider == "ollama":
+            return self.settings.OLLAMA_ENABLED
+        
+        return False
+    
+    def _get_gemini_api_key(self) -> str | None:
+        """Get Gemini API key from environment variables only (hybrid approach)"""
+        return self.settings.GEMINI_API_KEY
+    
+    def _get_gemini_model(self) -> str:
+        """Get Gemini model preference from database or fallback to environment"""
+        if self._admin_settings_raw and self._admin_settings_raw.gemini_model:
+            return self._admin_settings_raw.gemini_model
+        return self.settings.GEMINI_MODEL or "gemini-1.5-flash"
