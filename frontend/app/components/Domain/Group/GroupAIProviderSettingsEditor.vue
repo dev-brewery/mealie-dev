@@ -82,6 +82,32 @@
           {{ $t("group.ai-provider-settings.image-fallback-provider-description") }}
         </v-card-subtitle>
       </v-col>
+      <v-col cols="12">
+        <v-switch
+          v-model="local.ocrFallbackEnabled"
+          :label="$t('group.ai-provider-settings.ocr-fallback')"
+          :disabled="!local.ocrAvailable && !local.ocrFallbackEnabled"
+          color="primary"
+          hide-details
+          density="compact"
+          class="mt-0"
+        />
+        <v-card-subtitle class="mt-1">
+          {{ $t("group.ai-provider-settings.ocr-fallback-description") }}
+        </v-card-subtitle>
+        <v-alert
+          v-if="local.ocrFallbackEnabled && !local.ocrAvailable"
+          type="warning"
+          variant="tonal"
+          density="compact"
+          class="mt-2"
+        >
+          {{ $t("group.ai-provider-settings.ocr-unavailable") }}
+        </v-alert>
+        <v-card-subtitle v-else-if="!local.ocrAvailable" class="mt-1">
+          {{ $t("group.ai-provider-settings.ocr-unavailable") }}
+        </v-card-subtitle>
+      </v-col>
     </v-row>
 
     <GroupAIProviderDialog

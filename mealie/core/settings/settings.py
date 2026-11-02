@@ -556,6 +556,15 @@ class AppSettings(AppLoggingSettings):
     YTDLP_COOKIEFILE: str | None = None
     """Path to a cookies file for yt_dlp (used for video transcription scraping)"""
 
+    # ===============================================
+    # OCR Configuration
+
+    OCR_LANGUAGES: str = "eng"
+    """
+    Tesseract language codes used by the OCR fallback for recipe photos, joined with "+" (e.g. "eng+deu").
+    Every language must have its Tesseract language pack installed, or the OCR fallback is unavailable.
+    """
+
 
 def app_settings_constructor(data_dir: Path, production: bool, env_file: Path, env_encoding="utf-8") -> AppSettings:
     """

@@ -185,6 +185,9 @@ class AIProviderSettings(SqlAlchemyBase, BaseMixins):
         post_update=True,
     )
 
+    # Read photos with Tesseract when no image provider can, and build the recipe from the text
+    ocr_fallback_enabled: orm.Mapped[bool] = orm.mapped_column(sa.Boolean, nullable=False, default=False)
+
     @auto_init()
     def __init__(self, **_) -> None:
         pass

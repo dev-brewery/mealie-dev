@@ -95,10 +95,14 @@ export interface AIProviderSettingsOut {
   audioProviderId: string | null;
   imageProviderId: string | null;
   imageFallbackProviderId?: string | null;
+  ocrFallbackEnabled?: boolean;
   providers: AIProviderSummary[];
   aiEnabled: boolean;
   audioProviderEnabled: boolean;
   imageProviderEnabled: boolean;
+  ocrAvailable: boolean;
+  ocrFallbackActive: boolean;
+  imageImportEnabled: boolean;
   imageFallbackProviderEnabled: boolean;
 }
 export interface AIProviderSummary {

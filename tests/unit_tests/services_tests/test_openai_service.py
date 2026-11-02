@@ -21,6 +21,7 @@ def _make_mock_repos() -> MagicMock:
     provider_settings.audio_provider_id = None
     provider_settings.image_provider_id = None
     provider_settings.image_fallback_provider_id = None
+    provider_settings.ocr_fallback_enabled = False
 
     repos = MagicMock()
     repos.group_id = uuid4()

@@ -14,7 +14,8 @@ class ImageCompiler(SourceCompiler):
     progress_key = "recipe.create-progress.reading-images-with-ai"
 
     def can_compile(self) -> bool:
-        return bool(self.ctx.input.images)
+        # images can also be imported with OCR alone, in which case there's no image provider to ask
+        return bool(self.ctx.input.images) and self.ctx.ai.image_provider is not None
 
     def _provider(self) -> AIProviderOut | None:
         """The provider to read the images with. None uses the group's image provider."""

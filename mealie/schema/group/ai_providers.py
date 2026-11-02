@@ -5,7 +5,9 @@ from pydantic import UUID4, ConfigDict, Field, ValidationInfo, computed_field, f
 from sqlalchemy.orm import joinedload, selectinload
 from sqlalchemy.orm.interfaces import LoaderOption
 
+from mealie.core.config import get_app_settings
 from mealie.db.models.group.ai_providers import AIProvider, AIProviderSettings
+from mealie.pkgs import ocr
 from mealie.schema._mealie import MealieModel
 
 
@@ -143,6 +145,8 @@ class AIProviderSettingsUpdate(MealieModel):
     image_provider_id: UUID4 | None
     image_fallback_provider_id: UUID4 | None = None
     """Retried with the images when the image provider fails to read them"""
+    ocr_fallback_enabled: bool = False
+    """Read images with OCR when no image provider can, and build the recipe from the text"""
 
     @field_validator(
         "default_provider_id", "audio_provider_id", "image_provider_id", "image_fallback_provider_id", mode="before"
@@ -196,6 +200,25 @@ class AIProviderSettingsOut(AIProviderSettingsUpdate):
     @property
     def image_provider_enabled(self) -> bool:
         return self.ai_enabled and self.image_provider_id is not None
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def ocr_available(self) -> bool:
+        """Whether Tesseract and the configured language packs are installed on the server"""
+        # looked up through the module so tests can stand in for Tesseract
+        return ocr.is_available(get_app_settings().OCR_LANGUAGES)
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def ocr_fallback_active(self) -> bool:
+        # OCR only reads the text; building the recipe from it still needs the default provider
+        return self.ai_enabled and self.ocr_fallback_enabled and self.ocr_available
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def image_import_enabled(self) -> bool:
+        """Whether recipes can be imported from images, by an image provider or by OCR"""
+        return self.image_provider_enabled or self.ocr_fallback_active
 
     @computed_field  # type: ignore[misc]
     @property

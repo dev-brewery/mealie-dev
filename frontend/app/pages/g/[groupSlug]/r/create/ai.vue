@@ -69,6 +69,15 @@
         />
 
         <div v-if="imagesEnabled" class="mt-6">
+          <v-alert
+            v-if="imagesReadWithOcrOnly"
+            type="info"
+            variant="tonal"
+            density="compact"
+            class="mb-4"
+          >
+            {{ $t('recipe.import-with-ai-ocr-only-hint') }}
+          </v-alert>
           <RecipeImportImages v-model="uploadedImages" :disabled="state.loading" />
         </div>
         <v-alert
@@ -194,7 +203,11 @@ const groupSlug = computed(() => route.params.groupSlug as string || auth.user.v
 const urlImporterTarget = computed(() => `/g/${groupSlug.value}/r/create/url`);
 const htmlOrJsonImporterTarget = computed(() => `/g/${groupSlug.value}/r/create/html`);
 const aiEnabled = computed(() => !!group.value?.aiProviderSettings?.aiEnabled);
-const imagesEnabled = computed(() => !!group.value?.aiProviderSettings?.imageProviderEnabled);
+// photos are read by the image provider, or with OCR when the group has turned that on instead
+const imagesEnabled = computed(() => !!group.value?.aiProviderSettings?.imageImportEnabled);
+const imagesReadWithOcrOnly = computed(
+  () => !group.value?.aiProviderSettings?.imageProviderEnabled && !!group.value?.aiProviderSettings?.ocrFallbackActive,
+);
 const videosEnabled = computed(() => !!group.value?.aiProviderSettings?.audioProviderEnabled);
 
 const domUrlForm = ref<VForm | null>(null);
