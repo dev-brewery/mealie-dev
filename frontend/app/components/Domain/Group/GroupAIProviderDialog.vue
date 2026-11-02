@@ -13,6 +13,17 @@
   >
     <v-card-text v-if="init" style="max-height: 70vh; overflow-y: auto;">
       <v-form ref="form" v-no-autofill>
+        <v-select
+          :model-value="selectedPresetId"
+          :items="presetItems"
+          :label="$t('group.ai-provider-settings.provider-preset')"
+          :hint="presetHint"
+          persistent-hint
+          density="compact"
+          variant="outlined"
+          class="mb-4"
+          @update:model-value="onPresetChange"
+        />
         <v-text-field
           v-model="formData.name"
           :label="$t('group.ai-provider-settings.provider-name')"
@@ -39,6 +50,7 @@
               : 'group.ai-provider-settings.api-key-description-create',
           )"
           :persistent-hint="isEdit"
+          :placeholder="selectedPreset?.apiKeyPlaceholder"
           :rules="isEdit ? [] : [validators.required]"
           density="compact"
           variant="outlined"
@@ -114,6 +126,13 @@
 </template>
 
 <script setup lang="ts">
+import {
+  AI_PROVIDER_PRESETS,
+  type AIProviderPresetId,
+  applyAIProviderPreset,
+  detectAIProviderPreset,
+  getAIProviderPreset,
+} from "~/composables/use-ai-provider-presets";
 import { useAIProviders } from "~/composables/use-ai-providers";
 import { validators } from "~/composables/use-validators";
 import type { AIProviderCreate, AIProviderTestResult, AIProviderUpdate } from "~/lib/api/types/group";
@@ -153,6 +172,31 @@ const defaultForm = () => ({
 
 const formData = reactive(defaultForm());
 
+// A preset only fills in the form; nothing about it is saved. It starts unset when creating a
+// provider, so the form is unchanged for anyone who doesn't use it, and is detected from the base
+// URL when editing one.
+const selectedPresetId = ref<AIProviderPresetId | null>(null);
+const selectedPreset = computed(() => getAIProviderPreset(selectedPresetId.value));
+
+const presetItems = computed(() =>
+  AI_PROVIDER_PRESETS.map(preset => ({
+    title: preset.name || i18n.t("group.ai-provider-settings.preset-custom"),
+    value: preset.id,
+  })),
+);
+
+const presetHint = computed(() =>
+  i18n.t(selectedPreset.value?.hintKey ?? "group.ai-provider-settings.provider-preset-hint"),
+);
+
+function onPresetChange(id: AIProviderPresetId | null) {
+  const to = getAIProviderPreset(id);
+  if (to) {
+    applyAIProviderPreset(formData, selectedPreset.value, to);
+  }
+  selectedPresetId.value = id;
+}
+
 const testing = ref(false);
 const testResult = ref<AIProviderTestResult | null>(null);
 
@@ -164,7 +208,15 @@ const connectionMessage = computed(() => {
   const result = testResult.value;
   if (!result) return "";
   if (result.success) return i18n.t("group.ai-provider-settings.test-connection-succeeded");
-  return result.message || i18n.t("group.ai-provider-settings.test-connection-failed");
+  if (!result.message) return i18n.t("group.ai-provider-settings.test-connection-failed");
+
+  // The provider answered, but not with JSON matching the schema Mealie sent as response_format,
+  // which almost always means the model (or the provider's compatibility layer) doesn't support
+  // structured outputs. The bare error name doesn't tell anyone that.
+  if (result.message.startsWith("ValidationError")) {
+    return `${result.message} — ${i18n.t("group.ai-provider-settings.test-connection-invalid-response")}`;
+  }
+  return result.message;
 });
 
 // Capability info rather than a second pass/fail check - a text-only provider is a valid setup,
@@ -201,6 +253,7 @@ watch(
     if (token !== requestToken) return;
     init.value = true;
     if (data) {
+      selectedPresetId.value = detectAIProviderPreset(data.baseUrl);
       formData.name = data.name;
       formData.model = data.model;
       formData.apiKey = "";
@@ -248,6 +301,7 @@ function handleSubmit() {
 
 function resetForm() {
   Object.assign(formData, defaultForm());
+  selectedPresetId.value = null;
   form.value?.reset();
   advancedPanel.value = undefined;
   testResult.value = null;

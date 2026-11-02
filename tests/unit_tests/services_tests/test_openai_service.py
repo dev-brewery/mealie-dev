@@ -448,6 +448,26 @@ async def test_get_response_raises_when_response_not_json(settings_stub):
 
 
 @pytest.mark.asyncio
+async def test_connection_reports_unparseable_reply_as_validation_error(settings_stub):
+    """
+    A provider whose compatibility layer ignores response_format answers in prose. The connection
+    test must report that as a ValidationError (and nothing more), which the provider dialog uses to
+    explain that the model needs to support structured outputs.
+    """
+    svc = OpenAIService(_make_mock_repos())
+    completions = _FakeCompletions(parse_result=_make_body("Hello! How can I help you today?"))
+    svc.get_client = MagicMock(return_value=_FakeClient(completions))
+
+    result = await svc.test_connection(_make_test_provider())
+
+    assert result.success is False
+    assert result.message == "ValidationError"
+    assert result.supports_images is None
+    # the reply itself is never relayed back
+    assert "Hello" not in (result.message or "")
+
+
+@pytest.mark.asyncio
 async def test_get_response_raises_on_length_finish_reason(settings_stub):
     svc = OpenAIService(_make_mock_repos())
     completions = _FakeCompletions(parse_result=_make_body('{"answer": "hi"}', finish_reason="length"))

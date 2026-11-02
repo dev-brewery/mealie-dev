@@ -256,7 +256,17 @@
       "test-connection-succeeded": "Connection successful",
       "test-connection-failed": "Connection failed",
       "supports-images": "Supports images",
-      "text-only-provider": "Text-only, can't be your image provider"
+      "text-only-provider": "Text-only, can't be your image provider",
+      "test-connection-invalid-response": "The provider replied, but not in the format Mealie asked for. Make sure the model supports structured outputs (JSON schema).",
+      "provider-preset": "Provider Preset",
+      "provider-preset-hint": "Optional. Fills in the base URL and a suggested model for a known provider.",
+      "preset-custom": "Custom (OpenAI-compatible)",
+      "preset-hint-openai": "Use an API key from your OpenAI account, and leave the base URL blank.",
+      "preset-hint-anthropic": "Use a Claude API key from the Claude Console. Claude can read images, but not audio, so it can't be your audio provider.",
+      "preset-hint-gemini": "Use a Gemini API key from Google AI Studio, and enter the name of a current Gemini model.",
+      "preset-hint-ollama": "Ollama doesn't check API keys, but one is still required here, so enter anything (e.g. \"ollama\"). If Mealie runs in Docker, replace localhost with host.docker.internal or your Ollama container's name. To use it as your image provider, choose a vision model.",
+      "preset-hint-openrouter": "Model names include the vendor (e.g. \"openai/gpt-5\"). Choose a model that supports structured outputs.",
+      "preset-hint-custom": "Any provider with an OpenAI-compatible API. Enter its base URL, which usually ends in /v1."
     },
     "ai-prompts": {
       "ai-prompts": "AI Prompts",

@@ -16,11 +16,26 @@ To set up AI providers, visit your group settings.
 
 For most users, choosing an OpenAI model (such as `gpt-5`) and supplying the OpenAI API key is all you need to do. Note that while OpenAI has a free tier, it's not sufficiently capable for Mealie (or most other production use cases). For more information, check out [OpenAI's rate limits](https://platform.openai.com/docs/guides/rate-limits). If you deposit $5 into your OpenAI account, you will be permanently bumped up to Tier 1, which is sufficient for Mealie. Cost per-request is dependant on many factors, but Mealie tries to keep token counts conservative.
 
-If you have another provider you'd like to use, such as Azure, you can configure Mealie to use that instead as long as it has an OpenAI-compatible API. For instance, a common self-hosted alternative to OpenAI is [Ollama](https://ollama.com/). To use Ollama with Mealie, set your `base_url` to `http://localhost:11434/v1` (where `http://localhost:11434` is wherever you're hosting Ollama, and `/v1` enables the OpenAI-compatible endpoints). Note that you *must* provide an API key, even though it is ultimately ignored by Ollama.
+If you have another provider you'd like to use, you can configure Mealie to use that instead as long as it has an OpenAI-compatible API. See [Provider presets](#provider-presets) below.
 
 Note that some models are capable of handling multiple features (e.g. `gpt-5` can handle both normal chat requests and image recognition requests). You may configure one provider for multiple provider features.
 
 While Mealie has prompts for each AI task, you can customize them with your own instructions if you'd like. See [Custom prompts](#custom-prompts) below.
+
+### Provider presets
+
+When you create a provider, you can pick a **Provider Preset** to fill in the base URL and, where there's an obvious choice, a suggested model. A preset only fills in the form: every provider is saved as a base URL, model, and API key, and you can change any of them. Values you've already typed are never overwritten.
+
+| Preset | Base URL | Notes |
+| ------ | -------- | ----- |
+| OpenAI | *(blank)* | Handles text, images, and audio (with a transcription model such as `whisper-1`). |
+| Anthropic | `https://api.anthropic.com/v1/` | Use a Claude API key. Supports text and images, but not audio, so it can't be your audio provider. |
+| Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/` | Use a Gemini API key from Google AI Studio and enter a current Gemini model name. |
+| Ollama | `http://localhost:11434/v1` | Replace `localhost:11434` with wherever you host Ollama (in Docker, usually `host.docker.internal` or the Ollama container's name). You *must* enter an API key, even though Ollama ignores it. Use a vision model if it will be your image provider. |
+| OpenRouter | `https://openrouter.ai/api/v1` | Model names include the vendor (e.g. `openai/gpt-5`). |
+| Custom | *(your own)* | Any other OpenAI-compatible API, such as Azure OpenAI or a self-hosted server. |
+
+Mealie asks every provider for its answer in a fixed JSON format (OpenAI's "structured outputs"), so the model you choose must support them. If a provider's compatibility layer ignores that request, **Test Connection** reports a `ValidationError` and explains the cause. Try a different model, or a different provider.
 
 ## AI Features
 - The AI Ingredient Parser can be used as an alternative to the NLP and Brute Force parsers. Simply choose the AI parser while parsing ingredients (:octicons-tag-24: v1.7.0)
