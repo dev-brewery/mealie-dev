@@ -174,6 +174,17 @@ class AIProviderSettings(SqlAlchemyBase, BaseMixins):
         post_update=True,
     )
 
+    # Retried with the images when the image provider fails to read them
+    image_fallback_provider_id: orm.Mapped[GUID | None] = orm.mapped_column(
+        GUID, sa.ForeignKey("ai_providers.id", use_alter=True), nullable=True, index=True
+    )
+    image_fallback_provider: orm.Mapped[AIProvider | None] = orm.relationship(
+        AIProvider,
+        foreign_keys="[AIProviderSettings.image_fallback_provider_id]",
+        uselist=False,
+        post_update=True,
+    )
+
     @auto_init()
     def __init__(self, **_) -> None:
         pass

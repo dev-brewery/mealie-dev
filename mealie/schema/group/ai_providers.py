@@ -141,8 +141,12 @@ class AIProviderSettingsUpdate(MealieModel):
     default_provider_id: UUID4 | None
     audio_provider_id: UUID4 | None
     image_provider_id: UUID4 | None
+    image_fallback_provider_id: UUID4 | None = None
+    """Retried with the images when the image provider fails to read them"""
 
-    @field_validator("default_provider_id", "audio_provider_id", "image_provider_id", mode="before")
+    @field_validator(
+        "default_provider_id", "audio_provider_id", "image_provider_id", "image_fallback_provider_id", mode="before"
+    )
     def validate_as_none(val: Any | None) -> Any | None:
         return val or None
 
@@ -152,6 +156,7 @@ class AIProviderSettingsUpdate(MealieModel):
             joinedload(AIProviderSettings.default_provider),
             joinedload(AIProviderSettings.audio_provider),
             joinedload(AIProviderSettings.image_provider),
+            joinedload(AIProviderSettings.image_fallback_provider),
         ]
 
 
@@ -163,7 +168,12 @@ class AIProviderSettingsOut(AIProviderSettingsUpdate):
     @model_validator(mode="after")
     def validate_providers(self) -> Self:
         existing_ids = {provider.id for provider in self.providers}
-        for provider_id_name in ["default_provider_id", "audio_provider_id", "image_provider_id"]:
+        for provider_id_name in [
+            "default_provider_id",
+            "audio_provider_id",
+            "image_provider_id",
+            "image_fallback_provider_id",
+        ]:
             if not (val := getattr(self, provider_id_name, None)):
                 continue
 
@@ -187,6 +197,16 @@ class AIProviderSettingsOut(AIProviderSettingsUpdate):
     def image_provider_enabled(self) -> bool:
         return self.ai_enabled and self.image_provider_id is not None
 
+    @computed_field  # type: ignore[misc]
+    @property
+    def image_fallback_provider_enabled(self) -> bool:
+        # a fallback that's the image provider itself would only repeat the same failing request
+        return (
+            self.image_provider_enabled
+            and self.image_fallback_provider_id is not None
+            and self.image_fallback_provider_id != self.image_provider_id
+        )
+
     @classmethod
     def loader_options(cls) -> list[LoaderOption]:
         return [
@@ -194,4 +214,5 @@ class AIProviderSettingsOut(AIProviderSettingsUpdate):
             joinedload(AIProviderSettings.default_provider),
             joinedload(AIProviderSettings.audio_provider),
             joinedload(AIProviderSettings.image_provider),
+            joinedload(AIProviderSettings.image_fallback_provider),
         ]

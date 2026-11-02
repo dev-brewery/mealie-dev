@@ -68,6 +68,14 @@ Reading the source material is the only step that needs to understand images or 
 
 This means an import with photos attached is read by your image provider even if you also pasted text alongside them.
 
+### Fallback image provider
+
+You can optionally choose a **Fallback Image Provider** in your group settings. If your image provider can't read the photos in an import (for example, the service is down, rate limits you, or rejects the request), Mealie retries them with the fallback provider before giving up. This is useful for pairing a self-hosted model with a hosted one, or two hosted providers with each other.
+
+- The fallback must be a different provider from your image provider, and it's only used when an image provider is set.
+- It's only used when reading the photos fails. If your image provider reads them and finds no recipe, the fallback isn't asked to try again.
+- Like your image provider, the fallback must be able to read images. **Test Connection** tells you whether a provider can.
+
 ## Custom prompts
 
 :octicons-tag-24: v3.30.0

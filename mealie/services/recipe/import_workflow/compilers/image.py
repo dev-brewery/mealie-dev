@@ -1,5 +1,6 @@
 import os
 
+from mealie.schema.group.ai_providers import AIProviderOut
 from mealie.schema.openai.compiled_source import OpenAICompiledSource
 from mealie.services.openai import OpenAILocalImage
 
@@ -15,6 +16,10 @@ class ImageCompiler(SourceCompiler):
     def can_compile(self) -> bool:
         return bool(self.ctx.input.images)
 
+    def _provider(self) -> AIProviderOut | None:
+        """The provider to read the images with. None uses the group's image provider."""
+        return None
+
     async def compile(self) -> OpenAICompiledSource | None:
         images = self.ctx.input.images
         attachments = [OpenAILocalImage(filename=os.path.basename(image), path=image) for image in images]
@@ -27,4 +32,21 @@ class ImageCompiler(SourceCompiler):
             message,
             response_schema=OpenAICompiledSource,
             attachments=attachments,
+            provider=self._provider(),
         )
+
+
+class FallbackImageCompiler(ImageCompiler):
+    """
+    Reads uploaded images with the group's fallback image provider. Only reached when the image
+    provider failed to read them (raised or returned nothing); an image provider that read the images
+    and found no recipe in them isn't a failure, so it isn't retried.
+    """
+
+    progress_key = "recipe.create-progress.reading-images-with-fallback-ai"
+
+    def can_compile(self) -> bool:
+        return super().can_compile() and self.ctx.ai.image_fallback_provider is not None
+
+    def _provider(self) -> AIProviderOut | None:
+        return self.ctx.ai.image_fallback_provider

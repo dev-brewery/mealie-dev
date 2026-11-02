@@ -129,6 +129,45 @@ def test_admin_update_group_ai_provider_settings(api_client: TestClient, admin_u
         unique_user.repos.group_ai_providers.delete(provider.id)
 
 
+def test_admin_update_group_image_fallback_provider(
+    api_client: TestClient, admin_user: TestUser, unique_user: TestUser
+):
+    """The admin group update carries the fallback image provider like the other provider roles."""
+    image_provider = unique_user.repos.group_ai_providers.create(
+        AIProviderCreate(name=random_string(), model="gpt-4o", api_key="test-key")
+    )
+    fallback_provider = unique_user.repos.group_ai_providers.create(
+        AIProviderCreate(name=random_string(), model="gpt-4o-mini", api_key="test-key")
+    )
+    try:
+        response = api_client.put(
+            api_routes.admin_groups_item_id(unique_user.group_id),
+            json={
+                "id": unique_user.group_id,
+                "name": unique_user.group_id,
+                "aiProviderSettings": {
+                    "defaultProviderId": str(image_provider.id),
+                    "audioProviderId": None,
+                    "imageProviderId": str(image_provider.id),
+                    "imageFallbackProviderId": str(fallback_provider.id),
+                },
+            },
+            headers=admin_user.token,
+        )
+        assert response.status_code == 200
+
+        settings = response.json()["aiProviderSettings"]
+        assert settings["imageFallbackProviderId"] == str(fallback_provider.id)
+        assert settings["imageFallbackProviderEnabled"] is True
+    finally:
+        unique_user.repos.group_ai_provider_settings.update(
+            unique_user.repos.group_id,
+            AIProviderSettingsUpdate(default_provider_id=None, audio_provider_id=None, image_provider_id=None),
+        )
+        unique_user.repos.group_ai_providers.delete(image_provider.id)
+        unique_user.repos.group_ai_providers.delete(fallback_provider.id)
+
+
 def test_admin_update_group_ai_provider_settings_clear(
     api_client: TestClient, admin_user: TestUser, unique_user: TestUser
 ):

@@ -5,6 +5,7 @@ from pathlib import Path
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import UUID4
 from slugify import slugify
 
 import mealie.services.openai.transcription as transcription_module
@@ -12,7 +13,7 @@ import mealie.services.recipe.import_workflow.steps.compile_source as compile_so
 from mealie.core import exceptions
 from mealie.lang import get_locale_provider
 from mealie.pkgs.safehttp.fetch import FetchResult
-from mealie.schema.group.ai_providers import AIProviderCreate, AIProviderSettingsUpdate
+from mealie.schema.group.ai_providers import AIProviderCreate, AIProviderOut, AIProviderSettingsUpdate
 from mealie.schema.openai.compiled_source import OpenAICompiledSource
 from mealie.schema.openai.organizers import OpenAIOrganizers
 from mealie.schema.openai.recipe import (
@@ -972,6 +973,105 @@ def test_create_with_images_but_no_image_provider(
         r = post_ai(api_client, unique_user, files=[("images", ("recipe.jpg", f, "image/jpeg"))])
 
     assert r.status_code == 400
+
+
+@pytest.fixture()
+def image_fallback_provider(unique_user: TestUser) -> Generator[AIProviderOut]:
+    """Adds a fallback image provider alongside the image provider the autouse fixture sets up."""
+
+    provider = unique_user.repos.group_ai_providers.create(
+        AIProviderCreate(name=random_string(), model="gpt-4o-mini", api_key="test-key")
+    )
+    settings = unique_user.repos.group_ai_provider_settings.get_one(unique_user.repos.group_id)
+    assert settings
+    unique_user.repos.group_ai_provider_settings.update(
+        unique_user.repos.group_id,
+        AIProviderSettingsUpdate(
+            default_provider_id=settings.default_provider_id,
+            audio_provider_id=settings.audio_provider_id,
+            image_provider_id=settings.image_provider_id,
+            image_fallback_provider_id=provider.id,
+        ),
+    )
+
+    yield provider
+
+    # the autouse fixture clears the settings afterwards, including the fallback
+    unique_user.repos.group_ai_providers.delete(provider.id)
+
+
+def install_image_reads(
+    monkeypatch: pytest.MonkeyPatch, recipe: OpenAIRecipe, *, image_provider_fails: bool
+) -> list[UUID4 | None]:
+    """
+    Stands in for the AI provider. Returns the provider each image read was sent to, in order: None
+    is the group's image provider, otherwise the explicit provider's id.
+    """
+    image_reads: list[UUID4 | None] = []
+
+    async def mock_get_response(self, prompt, message, *args, response_schema=None, provider=None, **kwargs):
+        if response_schema is OpenAICompiledSource:
+            image_reads.append(provider.id if provider else None)
+            if provider is None and image_provider_fails:
+                raise Exception("OpenAI Request Failed. RateLimitError: slow down")
+            return OpenAICompiledSource(contains_recipe=True, content=random_string(), language=None, image_url=None)
+        if response_schema is OpenAIRecipe:
+            return recipe
+        return None
+
+    monkeypatch.setattr(OpenAIService, "get_response", mock_get_response)
+    return image_reads
+
+
+def test_create_from_images_retries_with_fallback_provider(
+    api_client: TestClient,
+    unique_user: TestUser,
+    monkeypatch: pytest.MonkeyPatch,
+    openai_recipe: OpenAIRecipe,
+    test_image_jpg: str,
+    image_fallback_provider: AIProviderOut,
+):
+    image_reads = install_image_reads(monkeypatch, openai_recipe, image_provider_fails=True)
+
+    with open(test_image_jpg, "rb") as f:
+        r = post_ai(api_client, unique_user, files=[("images", ("recipe.jpg", f, "image/jpeg"))])
+
+    assert r.status_code == 201
+    assert image_reads == [None, image_fallback_provider.id]
+
+
+def test_create_from_images_skips_fallback_when_image_provider_succeeds(
+    api_client: TestClient,
+    unique_user: TestUser,
+    monkeypatch: pytest.MonkeyPatch,
+    openai_recipe: OpenAIRecipe,
+    test_image_jpg: str,
+    image_fallback_provider: AIProviderOut,
+):
+    image_reads = install_image_reads(monkeypatch, openai_recipe, image_provider_fails=False)
+
+    with open(test_image_jpg, "rb") as f:
+        r = post_ai(api_client, unique_user, files=[("images", ("recipe.jpg", f, "image/jpeg"))])
+
+    assert r.status_code == 201
+    assert image_reads == [None]
+
+
+def test_create_from_images_without_fallback_reports_unreadable_source(
+    api_client: TestClient,
+    unique_user: TestUser,
+    monkeypatch: pytest.MonkeyPatch,
+    openai_recipe: OpenAIRecipe,
+    test_image_jpg: str,
+):
+    image_reads = install_image_reads(monkeypatch, openai_recipe, image_provider_fails=True)
+
+    with open(test_image_jpg, "rb") as f:
+        r = post_ai(api_client, unique_user, files=[("images", ("recipe.jpg", f, "image/jpeg"))])
+
+    assert r.status_code == 400
+    assert r.json()["detail"]["message"] == translator.t("recipe.import-errors.unreadable-source")
+    assert image_reads == [None]
 
 
 def test_create_stream_emits_progress(

@@ -65,6 +65,23 @@
           {{ $t("group.ai-provider-settings.image-provider-description") }}
         </v-card-subtitle>
       </v-col>
+      <v-col cols="12">
+        <v-autocomplete
+          v-model="local.imageFallbackProviderId"
+          :label="$t('group.ai-provider-settings.image-fallback-provider')"
+          :items="fallbackProviderOptions"
+          :disabled="!local.imageProviderId"
+          item-title="name"
+          item-value="id"
+          clearable
+          hide-details
+          density="compact"
+          variant="outlined"
+        />
+        <v-card-subtitle class="mt-1">
+          {{ $t("group.ai-provider-settings.image-fallback-provider-description") }}
+        </v-card-subtitle>
+      </v-col>
     </v-row>
 
     <GroupAIProviderDialog
@@ -144,6 +161,21 @@ const local = reactive({ ...providerSettings.value });
 watch(local, (newVal) => { providerSettings.value = { ...newVal }; });
 // Sync back when the parent refreshes after create/update/delete
 watch(providerSettings, (newVal) => { if (newVal) Object.assign(local, newVal); });
+
+// The fallback is retried when the image provider fails, so the image provider itself isn't an option
+const fallbackProviderOptions = computed(
+  () => local.providers.filter(provider => provider.id !== local.imageProviderId),
+);
+
+// A fallback only makes sense alongside an image provider, and never the same one
+watch(
+  () => local.imageProviderId,
+  (imageProviderId) => {
+    if (!imageProviderId || imageProviderId === local.imageFallbackProviderId) {
+      local.imageFallbackProviderId = null;
+    }
+  },
+);
 
 const noDefaultProviderWarning = computed(
   () => local.providers.length > 0 && !local.defaultProviderId,

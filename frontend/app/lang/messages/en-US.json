@@ -234,6 +234,8 @@
       "audio-provider-description": "Enables audio transcription features, such as creating recipes from videos",
       "image-provider": "Image Provider",
       "image-provider-description": "Enables image recognition features, such as creating recipes from images",
+      "image-fallback-provider": "Fallback Image Provider",
+      "image-fallback-provider-description": "Optional. If your image provider can't read a recipe's images (for example, it's down or rate limited), they're read with this provider instead",
       "provider-name": "Provider Name",
       "api-key": "API Key",
       "api-key-description-create": "Your provider's API key for authentication. If your service (e.g. Ollama) doesn't use an API key, you still have to put something here.",

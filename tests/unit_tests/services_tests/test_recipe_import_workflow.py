@@ -16,7 +16,11 @@ from mealie.services.openai.content import (
     truncate_source_content,
     truncate_source_parts,
 )
-from mealie.services.recipe.import_workflow.compilers import DEFAULT_SOURCE_COMPILERS
+from mealie.services.recipe.import_workflow.compilers import (
+    DEFAULT_SOURCE_COMPILERS,
+    FallbackImageCompiler,
+    ImageCompiler,
+)
 from mealie.services.recipe.import_workflow.compilers.base import SourceCompiler, SourceType
 from mealie.services.recipe.import_workflow.context import WorkflowInput
 from mealie.services.recipe.import_workflow.recipe_conversion import (
@@ -261,6 +265,74 @@ async def test_a_compiler_returning_nothing_also_hands_over():
 
     assert compiled is not None
     assert compiled.content == "from the second url compiler"
+
+
+class StubImageAI:
+    """The parts of OpenAIService the image compilers touch, recording which provider each read used."""
+
+    def __init__(self, *, fallback_provider: object | None, image_provider_fails: bool) -> None:
+        self.image_fallback_provider = fallback_provider
+        self.image_provider_fails = image_provider_fails
+        self.providers: list[object | None] = []
+
+    def get_prompt(self, name: str) -> str:
+        return name
+
+    async def get_response(self, prompt, message, *, response_schema, attachments=None, provider=None):
+        self.providers.append(provider)
+        if provider is None and self.image_provider_fails:
+            raise RuntimeError("image provider unavailable")
+        return OpenAICompiledSource(contains_recipe=True, content=f"read by {provider or 'image provider'}")
+
+
+class StubImageContext(StubContext):
+    def __init__(self, ai: StubImageAI, images: list[Path]) -> None:
+        super().__init__()
+        self.input = WorkflowInput(images=images)
+        self.ai = ai
+
+
+def test_image_compilers_try_the_image_provider_before_the_fallback():
+    image_compilers = [c for c in DEFAULT_SOURCE_COMPILERS if c.source_type is SourceType.IMAGES]
+    assert image_compilers[:2] == [ImageCompiler, FallbackImageCompiler]
+
+
+@pytest.mark.asyncio
+async def test_fallback_image_provider_reads_images_the_image_provider_could_not(tmp_path: Path):
+    ai = StubImageAI(fallback_provider="fallback", image_provider_fails=True)
+    ctx = StubImageContext(ai, [tmp_path / "recipe.jpg"])
+    step = CompileSourceStep(compilers=[ImageCompiler, FallbackImageCompiler])
+
+    compiled = await step._compile(ctx, SourceType.IMAGES)
+
+    assert compiled is not None
+    assert compiled.content == "read by fallback"
+    assert ai.providers == [None, "fallback"]
+    assert ctx.progress == [ImageCompiler.progress_key, FallbackImageCompiler.progress_key]
+
+
+@pytest.mark.asyncio
+async def test_fallback_image_compiler_is_skipped_without_a_fallback_provider(tmp_path: Path):
+    ai = StubImageAI(fallback_provider=None, image_provider_fails=True)
+    ctx = StubImageContext(ai, [tmp_path / "recipe.jpg"])
+    step = CompileSourceStep(compilers=[ImageCompiler, FallbackImageCompiler])
+
+    compiled = await step._compile(ctx, SourceType.IMAGES)
+
+    assert compiled is None
+    assert ai.providers == [None]
+
+
+@pytest.mark.asyncio
+async def test_fallback_image_compiler_is_not_used_when_the_image_provider_succeeds(tmp_path: Path):
+    ai = StubImageAI(fallback_provider="fallback", image_provider_fails=False)
+    ctx = StubImageContext(ai, [tmp_path / "recipe.jpg"])
+    step = CompileSourceStep(compilers=[ImageCompiler, FallbackImageCompiler])
+
+    compiled = await step._compile(ctx, SourceType.IMAGES)
+
+    assert compiled is not None
+    assert ai.providers == [None]
 
 
 class StubTranslator:

@@ -99,10 +99,12 @@ export interface AIProviderSettingsOut {
   defaultProviderId: string | null;
   audioProviderId: string | null;
   imageProviderId: string | null;
+  imageFallbackProviderId?: string | null;
   providers: AIProviderSummary[];
   aiEnabled: boolean;
   audioProviderEnabled: boolean;
   imageProviderEnabled: boolean;
+  imageFallbackProviderEnabled: boolean;
 }
 export interface AIProviderSummary {
   id: string;
@@ -112,6 +114,7 @@ export interface AIProviderSettingsUpdate {
   defaultProviderId: string | null;
   audioProviderId: string | null;
   imageProviderId: string | null;
+  imageFallbackProviderId?: string | null;
 }
 export interface AIProviderTestResult {
   success: boolean;

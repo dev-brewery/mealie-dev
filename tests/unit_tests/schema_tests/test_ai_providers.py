@@ -57,6 +57,7 @@ class AIProviderSettingsOutTests:
         default_provider_id=None,
         audio_provider_id=None,
         image_provider_id=None,
+        image_fallback_provider_id=None,
         providers=None,
     ) -> AIProviderSettingsOut:
         if providers is None:
@@ -65,6 +66,7 @@ class AIProviderSettingsOutTests:
             default_provider_id=default_provider_id,
             audio_provider_id=audio_provider_id,
             image_provider_id=image_provider_id,
+            image_fallback_provider_id=image_fallback_provider_id,
             providers=providers,
         )
 
@@ -138,7 +140,58 @@ class AIProviderSettingsOutTests:
         assert s.ai_enabled
         assert s.image_provider_enabled
 
+    # --- image_fallback_provider_enabled ---
+
+    def _fallback_settings(self, *, with_image_provider: bool = True, same_as_image: bool = False):
+        pid, image_id, fallback_id = uuid4(), uuid4(), uuid4()
+        if same_as_image:
+            fallback_id = image_id
+        return self._make_settings(
+            default_provider_id=pid,
+            image_provider_id=image_id if with_image_provider else None,
+            image_fallback_provider_id=fallback_id,
+            providers=[
+                AIProviderSummary(id=pid, name="p"),
+                AIProviderSummary(id=image_id, name="img"),
+                AIProviderSummary(id=fallback_id, name="fallback"),
+            ],
+        )
+
+    def test_image_fallback_provider_enabled_with_image_provider(self):
+        s = self._fallback_settings()
+        assert s.image_provider_enabled
+        assert s.image_fallback_provider_enabled
+
+    def test_image_fallback_provider_disabled_without_image_provider(self):
+        s = self._fallback_settings(with_image_provider=False)
+        assert not s.image_provider_enabled
+        assert not s.image_fallback_provider_enabled
+
+    def test_image_fallback_provider_disabled_when_same_as_image_provider(self):
+        s = self._fallback_settings(same_as_image=True)
+        assert s.image_provider_enabled
+        assert not s.image_fallback_provider_enabled
+
+    def test_image_fallback_provider_disabled_when_unset(self):
+        s = self._make_settings()
+        assert s.image_fallback_provider_id is None
+        assert not s.image_fallback_provider_enabled
+
     # --- validate_providers model validator ---
+
+    def test_validate_providers_strips_unknown_image_fallback(self):
+        pid = uuid4()
+        image_id = uuid4()
+        providers = [AIProviderSummary(id=pid, name="p"), AIProviderSummary(id=image_id, name="img")]
+        s = self._make_settings(
+            default_provider_id=pid,
+            image_provider_id=image_id,
+            image_fallback_provider_id=uuid4(),
+            providers=providers,
+        )
+        assert s.image_provider_id == image_id
+        assert s.image_fallback_provider_id is None
+        assert not s.image_fallback_provider_enabled
 
     def test_validate_providers_strips_unknown_default(self):
         s = self._make_settings(default_provider_id=uuid4(), providers=[])

@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
 from fastapi import HTTPException, status
-from pydantic import BaseModel, field_validator
+from pydantic import UUID4, BaseModel, field_validator
 
 from mealie.core import exceptions
 from mealie.pkgs import img
@@ -146,23 +146,23 @@ class OpenAIService(BaseService):
         self.provider_settings = repos.group_ai_provider_settings.get_one(repos.group_id)
 
         # Load providers
-        self.default_provider = (
-            self.repos.group_ai_providers.get_one(self.provider_settings.default_provider_id)
-            if self.provider_settings and self.provider_settings.default_provider_id
-            else None
-        )
-        self.audio_provider = (
-            self.repos.group_ai_providers.get_one(self.provider_settings.audio_provider_id)
-            if self.provider_settings and self.provider_settings.audio_provider_id
-            else None
-        )
-        self.image_provider = (
-            self.repos.group_ai_providers.get_one(self.provider_settings.image_provider_id)
-            if self.provider_settings and self.provider_settings.image_provider_id
+        settings = self.provider_settings
+        self.default_provider = self._load_provider(settings.default_provider_id if settings else None)
+        self.audio_provider = self._load_provider(settings.audio_provider_id if settings else None)
+        self.image_provider = self._load_provider(settings.image_provider_id if settings else None)
+
+        # Only meaningful alongside an image provider, and never the image provider itself: retrying
+        # the same provider with the same images would just repeat the request that failed.
+        self.image_fallback_provider = (
+            self._load_provider(settings.image_fallback_provider_id)
+            if settings and self.image_provider and settings.image_fallback_provider_id != settings.image_provider_id
             else None
         )
 
         super().__init__()
+
+    def _load_provider(self, provider_id: UUID4 | None) -> AIProviderOut | None:
+        return self.repos.group_ai_providers.get_one(provider_id) if provider_id else None
 
     def get_client(self, provider: AIProviderOut) -> AsyncOpenAI:
         from openai import AsyncOpenAI
@@ -257,7 +257,11 @@ class OpenAIService(BaseService):
         settings = self.provider_settings
         if not settings or provider.id != settings.audio_provider_id:
             return False
-        return provider.id not in (settings.default_provider_id, settings.image_provider_id)
+        return provider.id not in (
+            settings.default_provider_id,
+            settings.image_provider_id,
+            settings.image_fallback_provider_id,
+        )
 
     async def _check_transcription(self, provider: AIProviderOut) -> bool:
         """

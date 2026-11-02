@@ -49,6 +49,7 @@
             "fetching-webpage": "Fetching webpage...",
             "organizing-recipe": "Organizing recipe...",
             "reading-images-with-ai": "Reading images with AI...",
+            "reading-images-with-fallback-ai": "Reading images with your fallback image provider...",
             "reading-source-with-ai": "Reading source with AI...",
             "transcribing-audio-with-ai": "Transcribing audio with AI...",
             "translating-recipe": "Translating recipe..."
