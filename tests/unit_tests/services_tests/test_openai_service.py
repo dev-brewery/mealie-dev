@@ -20,6 +20,8 @@ def _make_mock_repos() -> MagicMock:
     provider_settings.default_provider_id = uuid4()
     provider_settings.audio_provider_id = None
     provider_settings.image_provider_id = None
+    provider_settings.image_fallback_provider_id = None
+    provider_settings.ocr_fallback_enabled = False
 
     repos = MagicMock()
     repos.group_id = uuid4()
@@ -55,6 +57,40 @@ def test_get_prompt_raises_when_no_files(settings_stub, monkeypatch):
     with pytest.raises(OSError) as ei:
         svc.get_prompt("recipes.parse-recipe-ingredients")
     assert "Unable to load prompt" in str(ei.value)
+
+
+def _make_repos_with_image_providers(image_provider_id, image_fallback_provider_id) -> MagicMock:
+    """Mock repos whose provider lookup returns a distinct provider per id"""
+    repos = _make_mock_repos()
+    settings = repos.group_ai_provider_settings.get_one.return_value
+    settings.image_provider_id = image_provider_id
+    settings.image_fallback_provider_id = image_fallback_provider_id
+    repos.group_ai_providers.get_one.side_effect = lambda provider_id: SimpleNamespace(id=provider_id)
+    return repos
+
+
+def test_image_fallback_provider_is_loaded(settings_stub):
+    image_id, fallback_id = uuid4(), uuid4()
+    svc = OpenAIService(_make_repos_with_image_providers(image_id, fallback_id))
+
+    assert svc.image_provider.id == image_id
+    assert svc.image_fallback_provider is not None
+    assert svc.image_fallback_provider.id == fallback_id
+
+
+def test_image_fallback_provider_requires_image_provider(settings_stub):
+    svc = OpenAIService(_make_repos_with_image_providers(None, uuid4()))
+
+    assert svc.image_provider is None
+    assert svc.image_fallback_provider is None
+
+
+def test_image_fallback_provider_ignored_when_same_as_image_provider(settings_stub):
+    image_id = uuid4()
+    svc = OpenAIService(_make_repos_with_image_providers(image_id, image_id))
+
+    assert svc.image_provider.id == image_id
+    assert svc.image_fallback_provider is None
 
 
 def _make_override(name: str, mode: AIPromptMode, content: str) -> AIPromptOverrideOut:
@@ -448,6 +484,26 @@ async def test_get_response_raises_when_response_not_json(settings_stub):
 
 
 @pytest.mark.asyncio
+async def test_connection_reports_unparseable_reply_as_validation_error(settings_stub):
+    """
+    A provider whose compatibility layer ignores response_format answers in prose. The connection
+    test must report that as a ValidationError (and nothing more), which the provider dialog uses to
+    explain that the model needs to support structured outputs.
+    """
+    svc = OpenAIService(_make_mock_repos())
+    completions = _FakeCompletions(parse_result=_make_body("Hello! How can I help you today?"))
+    svc.get_client = MagicMock(return_value=_FakeClient(completions))
+
+    result = await svc.test_connection(_make_test_provider())
+
+    assert result.success is False
+    assert result.message == "ValidationError"
+    assert result.supports_images is None
+    # the reply itself is never relayed back
+    assert "Hello" not in (result.message or "")
+
+
+@pytest.mark.asyncio
 async def test_get_response_raises_on_length_finish_reason(settings_stub):
     svc = OpenAIService(_make_mock_repos())
     completions = _FakeCompletions(parse_result=_make_body('{"answer": "hi"}', finish_reason="length"))
@@ -539,7 +595,7 @@ async def test_connection_audio_only_provider_fails_when_neither_works(settings_
     assert result.success is False
 
 
-@pytest.mark.parametrize("other_role", ["default_provider_id", "image_provider_id"])
+@pytest.mark.parametrize("other_role", ["default_provider_id", "image_provider_id", "image_fallback_provider_id"])
 @pytest.mark.asyncio
 async def test_connection_skips_transcription_when_provider_has_other_roles(settings_stub, monkeypatch, other_role):
     # A provider that also handles chat or images has to pass the chat test, otherwise that role could

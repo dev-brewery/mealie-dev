@@ -125,5 +125,6 @@ class AIRecipeService(RecipeService):
         if not (settings and settings.ai_enabled):
             raise AIProviderNotEnabledError(self.t("recipe.import-errors.ai-not-enabled"))
 
-        if has_images and not settings.image_provider_enabled:
+        # images are read by an image provider, or by OCR when the group has turned it on
+        if has_images and not settings.image_import_enabled:
             raise AIProviderNotEnabledError(self.t("recipe.import-errors.image-provider-not-enabled"))

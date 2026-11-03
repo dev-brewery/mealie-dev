@@ -52,21 +52,13 @@ class GroupRepositoryAIProvider(GroupRepositoryGeneric[AIProviderOut, AIProvider
 
     def delete(self, value, match_key: str | None = None) -> AIProviderOut:
         # Null out any settings references to this provider before deleting
-        self.session.execute(
-            sa.update(AIProviderSettings)
-            .where(AIProviderSettings.default_provider_id == value)
-            .values(default_provider_id=None)
-        )
-        self.session.execute(
-            sa.update(AIProviderSettings)
-            .where(AIProviderSettings.audio_provider_id == value)
-            .values(audio_provider_id=None)
-        )
-        self.session.execute(
-            sa.update(AIProviderSettings)
-            .where(AIProviderSettings.image_provider_id == value)
-            .values(image_provider_id=None)
-        )
+        for column in (
+            AIProviderSettings.default_provider_id,
+            AIProviderSettings.audio_provider_id,
+            AIProviderSettings.image_provider_id,
+            AIProviderSettings.image_fallback_provider_id,
+        ):
+            self.session.execute(sa.update(AIProviderSettings).where(column == value).values({column.key: None}))
 
         # Delete
         return super().delete(value, match_key)

@@ -16,11 +16,26 @@ To set up AI providers, visit your group settings.
 
 For most users, choosing an OpenAI model (such as `gpt-5`) and supplying the OpenAI API key is all you need to do. Note that while OpenAI has a free tier, it's not sufficiently capable for Mealie (or most other production use cases). For more information, check out [OpenAI's rate limits](https://platform.openai.com/docs/guides/rate-limits). If you deposit $5 into your OpenAI account, you will be permanently bumped up to Tier 1, which is sufficient for Mealie. Cost per-request is dependant on many factors, but Mealie tries to keep token counts conservative.
 
-If you have another provider you'd like to use, such as Azure, you can configure Mealie to use that instead as long as it has an OpenAI-compatible API. For instance, a common self-hosted alternative to OpenAI is [Ollama](https://ollama.com/). To use Ollama with Mealie, set your `base_url` to `http://localhost:11434/v1` (where `http://localhost:11434` is wherever you're hosting Ollama, and `/v1` enables the OpenAI-compatible endpoints). Note that you *must* provide an API key, even though it is ultimately ignored by Ollama.
+If you have another provider you'd like to use, you can configure Mealie to use that instead as long as it has an OpenAI-compatible API. See [Provider presets](#provider-presets) below.
 
 Note that some models are capable of handling multiple features (e.g. `gpt-5` can handle both normal chat requests and image recognition requests). You may configure one provider for multiple provider features.
 
 While Mealie has prompts for each AI task, you can customize them with your own instructions if you'd like. See [Custom prompts](#custom-prompts) below.
+
+### Provider presets
+
+When you create a provider, you can pick a **Provider Preset** to fill in the base URL and, where there's an obvious choice, a suggested model. A preset only fills in the form: every provider is saved as a base URL, model, and API key, and you can change any of them. Values you've already typed are never overwritten.
+
+| Preset | Base URL | Notes |
+| ------ | -------- | ----- |
+| OpenAI | *(blank)* | Handles text, images, and audio (with a transcription model such as `whisper-1`). |
+| Anthropic | `https://api.anthropic.com/v1/` | Use a Claude API key. Supports text and images, but not audio, so it can't be your audio provider. |
+| Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/` | Use a Gemini API key from Google AI Studio and enter a current Gemini model name. |
+| Ollama | `http://localhost:11434/v1` | Replace `localhost:11434` with wherever you host Ollama (in Docker, usually `host.docker.internal` or the Ollama container's name). You *must* enter an API key, even though Ollama ignores it. Use a vision model if it will be your image provider. |
+| OpenRouter | `https://openrouter.ai/api/v1` | Model names include the vendor (e.g. `openai/gpt-5`). |
+| Custom | *(your own)* | Any other OpenAI-compatible API, such as Azure OpenAI or a self-hosted server. |
+
+Mealie asks every provider for its answer in a fixed JSON format (OpenAI's "structured outputs"), so the model you choose must support them. If a provider's compatibility layer ignores that request, **Test Connection** reports a `ValidationError` and explains the cause. Try a different model, or a different provider.
 
 ## AI Features
 - The AI Ingredient Parser can be used as an alternative to the NLP and Brute Force parsers. Simply choose the AI parser while parsing ingredients (:octicons-tag-24: v1.7.0)
@@ -33,7 +48,7 @@ The **Import with AI** page, found under *Create ➞ Import with AI*, creates a 
 
 - **A URL.** Mealie fetches the page and reads the recipe from it. Give it a link to a video (e.g. YouTube or Instagram) and the video is transcribed instead, provided you've configured an audio provider. The URL is always saved as the recipe's source.
 - **Content.** Paste a recipe as plain text, or paste raw HTML or a [schema.org Recipe](https://schema.org/Recipe) JSON object. This is useful when a site blocks Mealie from reading it directly. It's also where you write notes about a recipe you're importing from somewhere else.
-- **Images.** Upload one or more photos of a recipe, hand-written or typed. Multiple photos are treated as pages of a single recipe, and the first one becomes the recipe's image. This requires an image provider.
+- **Images.** Upload one or more photos of a recipe, hand-written or typed. Multiple photos are treated as pages of a single recipe, and the first one becomes the recipe's image. This requires an image provider, or the [OCR fallback](#ocr-fallback).
 
 Every source you provide is read, and the results are combined into one description of the recipe. Content you paste alongside a URL, a video, or photos adds to them rather than replacing them, so a page that only partly loaded can be topped up by hand. Where your own content disagrees with the other sources it wins, so it doubles as a place for notes: what to name the recipe, a correction to an ingredient, a step the video skipped over. If content is the only thing you provide, it's simply the recipe's source material.
 
@@ -52,6 +67,24 @@ Mealie only assigns an organizer that the recipe itself refers to. It won't gues
 Reading the source material is the only step that needs to understand images or audio, so that's the only step that uses your image or audio provider. Turning what it read into a recipe, and working out its organizers, always use your default provider.
 
 This means an import with photos attached is read by your image provider even if you also pasted text alongside them.
+
+### Fallback image provider
+
+You can optionally choose a **Fallback Image Provider** in your group settings. If your image provider can't read the photos in an import (for example, the service is down, rate limits you, or rejects the request), Mealie retries them with the fallback provider before giving up. This is useful for pairing a self-hosted model with a hosted one, or two hosted providers with each other.
+
+- The fallback must be a different provider from your image provider, and it's only used when an image provider is set.
+- It's only used when reading the photos fails. If your image provider reads them and finds no recipe, the fallback isn't asked to try again.
+- Like your image provider, the fallback must be able to read images. **Test Connection** tells you whether a provider can.
+
+### OCR fallback
+
+You can also turn on the **OCR Fallback** in your group settings. Photos are then read on your own server with [Tesseract](https://github.com/tesseract-ocr/tesseract) OCR (optical character recognition) whenever no image provider can read them: either because you haven't configured an image provider at all, or because your image provider (and fallback image provider, if you have one) failed. The text OCR finds in every photo is then turned into a recipe by your default provider, so a default provider is still required, but it doesn't need to understand images.
+
+This is useful if you'd rather not send photos to an AI provider, or your default provider is a text-only model (such as a small self-hosted one).
+
+- OCR works best on clear photos of printed or typed recipes. It may misread handwriting, unusual fonts, or photos taken at an angle, and unlike an image provider it can't describe a dish from a photo of it.
+- The official Docker image includes Tesseract with English. To read recipes in other languages, set `OCR_LANGUAGES` and install the matching language packs (see [Backend Configuration](./backend-config.md#ai)).
+- If Tesseract or a configured language pack isn't installed, the setting can't be turned on, and the group settings page says why. Mealie checks for Tesseract once and remembers the result, so restart it after installing Tesseract or a language pack.
 
 ## Custom prompts
 

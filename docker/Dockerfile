@@ -130,6 +130,10 @@ ENV TESTING=false
 ARG COMMIT
 ENV GIT_COMMIT_HASH=$COMMIT
 
+# Extra Tesseract language packs for the OCR fallback, space-separated Debian package suffixes
+# (e.g. "deu fra"). Set OCR_LANGUAGES to match at runtime (e.g. "eng+deu+fra").
+ARG OCR_LANGUAGE_PACKS=""
+
 RUN apt-get update \
     && apt-get install --no-install-recommends -y \
     curl \
@@ -138,7 +142,10 @@ RUN apt-get update \
     iproute2 \
     libldap-common \
     libldap2 \
+    tesseract-ocr \
+    tesseract-ocr-eng \
     unzip \
+    $(for lang in $OCR_LANGUAGE_PACKS; do echo "tesseract-ocr-$lang"; done) \
     && rm -rf /var/lib/apt/lists/*
 
 # create directory used for Docker Secrets

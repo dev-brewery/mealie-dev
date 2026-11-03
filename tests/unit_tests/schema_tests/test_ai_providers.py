@@ -3,6 +3,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
+from mealie.pkgs import ocr
 from mealie.schema.group.ai_providers import (
     AIProviderCreate,
     AIProviderSettingsOut,
@@ -57,6 +58,8 @@ class AIProviderSettingsOutTests:
         default_provider_id=None,
         audio_provider_id=None,
         image_provider_id=None,
+        image_fallback_provider_id=None,
+        ocr_fallback_enabled=False,
         providers=None,
     ) -> AIProviderSettingsOut:
         if providers is None:
@@ -65,6 +68,8 @@ class AIProviderSettingsOutTests:
             default_provider_id=default_provider_id,
             audio_provider_id=audio_provider_id,
             image_provider_id=image_provider_id,
+            image_fallback_provider_id=image_fallback_provider_id,
+            ocr_fallback_enabled=ocr_fallback_enabled,
             providers=providers,
         )
 
@@ -138,7 +143,109 @@ class AIProviderSettingsOutTests:
         assert s.ai_enabled
         assert s.image_provider_enabled
 
+    # --- image_fallback_provider_enabled ---
+
+    def _fallback_settings(self, *, with_image_provider: bool = True, same_as_image: bool = False):
+        pid, image_id, fallback_id = uuid4(), uuid4(), uuid4()
+        if same_as_image:
+            fallback_id = image_id
+        return self._make_settings(
+            default_provider_id=pid,
+            image_provider_id=image_id if with_image_provider else None,
+            image_fallback_provider_id=fallback_id,
+            providers=[
+                AIProviderSummary(id=pid, name="p"),
+                AIProviderSummary(id=image_id, name="img"),
+                AIProviderSummary(id=fallback_id, name="fallback"),
+            ],
+        )
+
+    def test_image_fallback_provider_enabled_with_image_provider(self):
+        s = self._fallback_settings()
+        assert s.image_provider_enabled
+        assert s.image_fallback_provider_enabled
+
+    def test_image_fallback_provider_disabled_without_image_provider(self):
+        s = self._fallback_settings(with_image_provider=False)
+        assert not s.image_provider_enabled
+        assert not s.image_fallback_provider_enabled
+
+    def test_image_fallback_provider_disabled_when_same_as_image_provider(self):
+        s = self._fallback_settings(same_as_image=True)
+        assert s.image_provider_enabled
+        assert not s.image_fallback_provider_enabled
+
+    def test_image_fallback_provider_disabled_when_unset(self):
+        s = self._make_settings()
+        assert s.image_fallback_provider_id is None
+        assert not s.image_fallback_provider_enabled
+
+    # --- OCR fallback ---
+
+    @pytest.fixture()
+    def tesseract(self, monkeypatch: pytest.MonkeyPatch):
+        """Stands in for Tesseract being installed, or not; set `.installed` in the test"""
+        state = type("Tesseract", (), {"installed": True})()
+        monkeypatch.setattr(ocr, "is_available", lambda languages: state.installed)
+        return state
+
+    def _ocr_settings(self, *, with_default: bool = True, with_image_provider: bool = False, enabled: bool = True):
+        pid, image_id = uuid4(), uuid4()
+        return self._make_settings(
+            default_provider_id=pid if with_default else None,
+            image_provider_id=image_id if with_image_provider else None,
+            ocr_fallback_enabled=enabled,
+            providers=[AIProviderSummary(id=pid, name="p"), AIProviderSummary(id=image_id, name="img")],
+        )
+
+    def test_image_import_enabled_with_ocr_only(self, tesseract):
+        s = self._ocr_settings()
+        assert s.ocr_available
+        assert s.ocr_fallback_active
+        assert not s.image_provider_enabled
+        assert s.image_import_enabled
+
+    def test_image_import_enabled_with_image_provider_only(self, tesseract):
+        tesseract.installed = False
+        s = self._ocr_settings(with_image_provider=True, enabled=False)
+        assert not s.ocr_fallback_active
+        assert s.image_import_enabled
+
+    def test_ocr_inactive_when_tesseract_is_missing(self, tesseract):
+        tesseract.installed = False
+        s = self._ocr_settings()
+        assert not s.ocr_available
+        assert not s.ocr_fallback_active
+        assert not s.image_import_enabled
+
+    def test_ocr_inactive_without_default_provider(self, tesseract):
+        # OCR only reads the text; the default provider still has to build the recipe from it
+        s = self._ocr_settings(with_default=False)
+        assert not s.ai_enabled
+        assert not s.ocr_fallback_active
+        assert not s.image_import_enabled
+
+    def test_ocr_inactive_when_not_enabled(self, tesseract):
+        s = self._ocr_settings(enabled=False)
+        assert s.ocr_available
+        assert not s.ocr_fallback_active
+        assert not s.image_import_enabled
+
     # --- validate_providers model validator ---
+
+    def test_validate_providers_strips_unknown_image_fallback(self):
+        pid = uuid4()
+        image_id = uuid4()
+        providers = [AIProviderSummary(id=pid, name="p"), AIProviderSummary(id=image_id, name="img")]
+        s = self._make_settings(
+            default_provider_id=pid,
+            image_provider_id=image_id,
+            image_fallback_provider_id=uuid4(),
+            providers=providers,
+        )
+        assert s.image_provider_id == image_id
+        assert s.image_fallback_provider_id is None
+        assert not s.image_fallback_provider_enabled
 
     def test_validate_providers_strips_unknown_default(self):
         s = self._make_settings(default_provider_id=uuid4(), providers=[])

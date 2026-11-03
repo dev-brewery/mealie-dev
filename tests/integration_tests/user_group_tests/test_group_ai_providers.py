@@ -216,12 +216,16 @@ def test_update_settings_all_provider_types(api_client: TestClient, unique_user:
     image_provider = unique_user.repos.group_ai_providers.create(
         AIProviderCreate(name=random_string(), model="dall-e-3", api_key="test-key")
     )
+    image_fallback_provider = unique_user.repos.group_ai_providers.create(
+        AIProviderCreate(name=random_string(), model="gpt-4o", api_key="test-key")
+    )
 
     try:
         update = {
             "defaultProviderId": str(default_provider.id),
             "audioProviderId": str(audio_provider.id),
             "imageProviderId": str(image_provider.id),
+            "imageFallbackProviderId": str(image_fallback_provider.id),
         }
         response = api_client.put(api_routes.groups_ai_providers_settings, json=update, headers=unique_user.token)
         assert response.status_code == 200
@@ -230,12 +234,14 @@ def test_update_settings_all_provider_types(api_client: TestClient, unique_user:
         assert settings["defaultProviderId"] == str(default_provider.id)
         assert settings["audioProviderId"] == str(audio_provider.id)
         assert settings["imageProviderId"] == str(image_provider.id)
+        assert settings["imageFallbackProviderId"] == str(image_fallback_provider.id)
+        assert settings["imageFallbackProviderEnabled"] is True
     finally:
         unique_user.repos.group_ai_provider_settings.update(
             unique_user.repos.group_id,
             AIProviderSettingsUpdate(default_provider_id=None, audio_provider_id=None, image_provider_id=None),
         )
-        for p in [default_provider, audio_provider, image_provider]:
+        for p in [default_provider, audio_provider, image_provider, image_fallback_provider]:
             api_client.delete(api_routes.groups_ai_providers_providers_provider_id(p.id), headers=unique_user.token)
 
 
@@ -371,6 +377,46 @@ def test_delete_image_provider_clears_settings(api_client: TestClient, unique_us
         api_client.delete(
             api_routes.groups_ai_providers_providers_provider_id(default_provider.id), headers=unique_user.token
         )
+
+
+def test_delete_image_fallback_provider_clears_settings(api_client: TestClient, unique_user: TestUser):
+    default_provider = unique_user.repos.group_ai_providers.create(
+        AIProviderCreate(name=random_string(), model="gpt-4o", api_key="test-key")
+    )
+    image_provider = unique_user.repos.group_ai_providers.create(
+        AIProviderCreate(name=random_string(), model="gpt-4o", api_key="test-key")
+    )
+    image_fallback_provider = unique_user.repos.group_ai_providers.create(
+        AIProviderCreate(name=random_string(), model="gpt-4o-mini", api_key="test-key")
+    )
+    unique_user.repos.group_ai_provider_settings.update(
+        unique_user.repos.group_id,
+        AIProviderSettingsUpdate(
+            default_provider_id=default_provider.id,
+            audio_provider_id=None,
+            image_provider_id=image_provider.id,
+            image_fallback_provider_id=image_fallback_provider.id,
+        ),
+    )
+
+    try:
+        api_client.delete(
+            api_routes.groups_ai_providers_providers_provider_id(image_fallback_provider.id),
+            headers=unique_user.token,
+        )
+
+        settings = unique_user.repos.group_ai_provider_settings.get_one(unique_user.repos.group_id)
+        assert settings is not None
+        assert settings.image_fallback_provider_id is None
+        assert settings.image_provider_id == image_provider.id
+        assert settings.default_provider_id == default_provider.id
+    finally:
+        unique_user.repos.group_ai_provider_settings.update(
+            unique_user.repos.group_id,
+            AIProviderSettingsUpdate(default_provider_id=None, audio_provider_id=None, image_provider_id=None),
+        )
+        for p in [default_provider, image_provider]:
+            api_client.delete(api_routes.groups_ai_providers_providers_provider_id(p.id), headers=unique_user.token)
 
 
 # ==========================================

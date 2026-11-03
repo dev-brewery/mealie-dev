@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = "==3.14.*"
 
 [options]
@@ -1181,6 +1181,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pyhumps" },
     { name = "pyjwt" },
+    { name = "pytesseract" },
     { name = "python-dateutil" },
     { name = "python-dotenv" },
     { name = "python-ldap" },
@@ -1257,6 +1258,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = "==2.16.1" },
     { name = "pyhumps", specifier = "==3.8.0" },
     { name = "pyjwt", specifier = "==2.15.1" },
+    { name = "pytesseract", specifier = "==0.3.13" },
     { name = "python-dateutil", specifier = "==3.0.0" },
     { name = "python-dotenv", specifier = "==1.2.4" },
     { name = "python-ldap", specifier = "==3.4.8" },
@@ -1802,6 +1804,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/e4/8c/9a93f633252830c37e9e70f4fd2cc0a3b72b91f7efda74cbe047b4168474/pyrdfa3-3.6.5.tar.gz", hash = "sha256:0fc28ff1426af805b100aff7162db6a43fa215e37f92bce9b113b465feb563ea", size = 84561, upload-time = "2026-01-17T23:10:17.064Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/79/9c/ce827ad1262c02cfd377dd75b73010f83010f05fa6db662af950948c0e61/pyrdfa3-3.6.5-py3-none-any.whl", hash = "sha256:3c0d22e2949e7b3abd004fff7c7f110faa83a18bec06f590bdab2ef0f1ee3c02", size = 97535, upload-time = "2026-01-17T23:10:15.731Z" },
+]
+
+[[package]]
+name = "pytesseract"
+version = "0.3.13"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+    { name = "pillow" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9f/a6/7d679b83c285974a7cb94d739b461fa7e7a9b17a3abfd7bf6cbc5c2394b0/pytesseract-0.3.13.tar.gz", hash = "sha256:4bf5f880c99406f52a3cfc2633e42d9dc67615e69d8a509d74867d3baddb5db9", size = 17689, upload-time = "2024-08-16T02:33:56.762Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7a/33/8312d7ce74670c9d39a532b2c246a853861120486be9443eebf048043637/pytesseract-0.3.13-py3-none-any.whl", hash = "sha256:7a99c6c2ac598360693d83a416e36e0b33a67638bb9d77fdcac094a3589d4b34", size = 14705, upload-time = "2024-08-16T02:36:10.09Z" },
 ]
 
 [[package]]

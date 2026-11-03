@@ -173,6 +173,12 @@ Recipe import can also transcribe a video's audio with AI (e.g. to import a reci
 |-------------------------------------------------------------------------|:-----------:|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | YTDLP_COOKIEFILE | None | Cookiefile for yt-dlp to use when downloading a video, needed for content that requires sign-in |
 
+Recipe import can also read photos with OCR when no AI image provider can (see [OCR fallback](./ai-providers.md#ocr-fallback)). The official Docker image includes Tesseract with English; add language packs by building the image with the `OCR_LANGUAGE_PACKS` build argument (e.g. `--build-arg OCR_LANGUAGE_PACKS="deu fra"`), or by extending it and installing the `tesseract-ocr-<lang>` packages.
+
+| Variables | Default | Description |
+|-------------------------------------------------------------------------|:-----------:|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| OCR_LANGUAGES | eng | Tesseract language codes the OCR fallback reads photos in, joined with `+` (e.g. `eng+deu`). Every language's Tesseract language pack must be installed, otherwise the OCR fallback is unavailable. |
+
 ### Recipe Scraper
 
 When you import a recipe from a URL, Mealie fetches the page (and its image) before parsing it. Many

@@ -50,6 +50,18 @@ function mountDialog(providerId?: string) {
         AppLoader: { template: "<div />" },
         BaseKeyValueEditor: { template: "<div />" },
         VForm: { template: "<form><slot /></form>" },
+        VSelect: {
+          props: ["modelValue", "items", "hint"],
+          emits: ["update:modelValue"],
+          template: `
+            <div>
+              <select :value="modelValue" @change="$emit('update:modelValue', $event.target.value)">
+                <option v-for="item in items" :key="item.value" :value="item.value">{{ item.title }}</option>
+              </select>
+              <span class="select-hint">{{ hint }}</span>
+            </div>
+          `,
+        },
         VTextField: {
           props: ["modelValue"],
           template: "<input :value=\"modelValue\" @input=\"$emit('update:modelValue', $event.target.value)\">",
@@ -150,5 +162,63 @@ describe("groupAIProviderDialog", () => {
 
     expect(text).toContain("Connection successful");
     expect(text).toContain(note);
+  });
+
+  describe("provider presets", () => {
+    // findAll("input") order: name, model, API key, base URL
+    const inputValues = (wrapper: VueWrapper) => wrapper.findAll("input").map(input => input.element.value);
+
+    test("choosing a preset fills in the name, model, and base URL", async () => {
+      const wrapper = mountDialog();
+      await flushPromises();
+
+      await wrapper.find("select").setValue("anthropic");
+      await nextTick();
+
+      expect(inputValues(wrapper)).toEqual(["Anthropic", "claude-opus-5-5", "", "https://api.anthropic.com/v1/"]);
+      expect(wrapper.find(".select-hint").text()).toContain("Claude API key");
+    });
+
+    test("choosing a preset keeps values the user already typed", async () => {
+      const wrapper = mountDialog();
+      await flushPromises();
+
+      const [name, model] = wrapper.findAll("input");
+      await name!.setValue("Kitchen server");
+      await model!.setValue("qwen2.5vl");
+
+      await wrapper.find("select").setValue("ollama");
+      await nextTick();
+
+      expect(inputValues(wrapper)).toEqual(["Kitchen server", "qwen2.5vl", "", "http://localhost:11434/v1"]);
+    });
+
+    test("editing a provider pre-selects the preset matching its base URL", async () => {
+      mocks.getOne.mockResolvedValue({
+        data: provider({ id: "provider-a", name: "Claude", model: "claude-opus-5-5", baseUrl: "https://api.anthropic.com/v1" }),
+      });
+
+      const wrapper = mountDialog("provider-a");
+      await flushPromises();
+
+      expect((wrapper.find("select").element as HTMLSelectElement).value).toBe("anthropic");
+      // detecting the preset must not change the saved values
+      expect(inputValues(wrapper)).toEqual(["Claude", "claude-opus-5-5", "", "https://api.anthropic.com/v1"]);
+    });
+
+    test("a ValidationError test result explains structured outputs", async () => {
+      mocks.getOne.mockResolvedValue({ data: provider({ id: "provider-a", name: "Provider A", model: "model-a" }) });
+      mocks.testSavedOne.mockResolvedValue({ data: { success: false, message: "ValidationError", supportsImages: null } });
+
+      const wrapper = mountDialog("provider-a");
+      await flushPromises();
+
+      const testButton = wrapper.findAll("button").find(button => button.text() === "Test Connection");
+      await testButton!.trigger("click");
+      await flushPromises();
+
+      expect(wrapper.text()).toContain("ValidationError");
+      expect(wrapper.text()).toContain("structured outputs");
+    });
   });
 });

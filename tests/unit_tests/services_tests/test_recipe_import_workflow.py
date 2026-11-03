@@ -1,6 +1,7 @@
 import json
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -8,6 +9,7 @@ import pytest
 import mealie
 from mealie.lang import get_locale_provider
 from mealie.lang.providers import TRANSLATIONS
+from mealie.pkgs import ocr
 from mealie.pkgs.safehttp.fetch import FetchResult
 from mealie.schema.openai.compiled_source import OpenAICompiledSource
 from mealie.services.openai.content import (
@@ -16,8 +18,14 @@ from mealie.services.openai.content import (
     truncate_source_content,
     truncate_source_parts,
 )
-from mealie.services.recipe.import_workflow.compilers import DEFAULT_SOURCE_COMPILERS
+from mealie.services.recipe.import_workflow.compilers import (
+    DEFAULT_SOURCE_COMPILERS,
+    FallbackImageCompiler,
+    ImageCompiler,
+    OCRImageCompiler,
+)
 from mealie.services.recipe.import_workflow.compilers.base import SourceCompiler, SourceType
+from mealie.services.recipe.import_workflow.compilers.ocr import OCR_PREAMBLE
 from mealie.services.recipe.import_workflow.context import WorkflowInput
 from mealie.services.recipe.import_workflow.recipe_conversion import (
     DEFAULT_RECIPE_NAME,
@@ -261,6 +269,161 @@ async def test_a_compiler_returning_nothing_also_hands_over():
 
     assert compiled is not None
     assert compiled.content == "from the second url compiler"
+
+
+class StubImageAI:
+    """The parts of OpenAIService the image compilers touch, recording which provider each read used."""
+
+    def __init__(
+        self,
+        *,
+        fallback_provider: object | None,
+        image_provider_fails: bool,
+        image_provider: object | None = "image",
+        ocr_fallback_active: bool = False,
+    ) -> None:
+        self.image_provider = image_provider
+        self.image_fallback_provider = fallback_provider
+        self.image_provider_fails = image_provider_fails
+        self.provider_settings = SimpleNamespace(ocr_fallback_active=ocr_fallback_active)
+        self.providers: list[object | None] = []
+
+    def get_prompt(self, name: str) -> str:
+        return name
+
+    async def get_response(self, prompt, message, *, response_schema, attachments=None, provider=None):
+        self.providers.append(provider)
+        if provider is None and self.image_provider_fails:
+            raise RuntimeError("image provider unavailable")
+        return OpenAICompiledSource(contains_recipe=True, content=f"read by {provider or 'image provider'}")
+
+
+class StubImageContext(StubContext):
+    def __init__(self, ai: StubImageAI, images: list[Path]) -> None:
+        super().__init__()
+        self.input = WorkflowInput(images=images)
+        self.ai = ai
+
+
+def test_image_compilers_try_the_image_providers_before_ocr():
+    image_compilers = [c for c in DEFAULT_SOURCE_COMPILERS if c.source_type is SourceType.IMAGES]
+    assert image_compilers == [ImageCompiler, FallbackImageCompiler, OCRImageCompiler]
+
+
+@pytest.mark.asyncio
+async def test_fallback_image_provider_reads_images_the_image_provider_could_not(tmp_path: Path):
+    ai = StubImageAI(fallback_provider="fallback", image_provider_fails=True)
+    ctx = StubImageContext(ai, [tmp_path / "recipe.jpg"])
+    step = CompileSourceStep(compilers=[ImageCompiler, FallbackImageCompiler])
+
+    compiled = await step._compile(ctx, SourceType.IMAGES)
+
+    assert compiled is not None
+    assert compiled.content == "read by fallback"
+    assert ai.providers == [None, "fallback"]
+    assert ctx.progress == [ImageCompiler.progress_key, FallbackImageCompiler.progress_key]
+
+
+@pytest.mark.asyncio
+async def test_fallback_image_compiler_is_skipped_without_a_fallback_provider(tmp_path: Path):
+    ai = StubImageAI(fallback_provider=None, image_provider_fails=True)
+    ctx = StubImageContext(ai, [tmp_path / "recipe.jpg"])
+    step = CompileSourceStep(compilers=[ImageCompiler, FallbackImageCompiler])
+
+    compiled = await step._compile(ctx, SourceType.IMAGES)
+
+    assert compiled is None
+    assert ai.providers == [None]
+
+
+@pytest.mark.asyncio
+async def test_fallback_image_compiler_is_not_used_when_the_image_provider_succeeds(tmp_path: Path):
+    ai = StubImageAI(fallback_provider="fallback", image_provider_fails=False)
+    ctx = StubImageContext(ai, [tmp_path / "recipe.jpg"])
+    step = CompileSourceStep(compilers=[ImageCompiler, FallbackImageCompiler])
+
+    compiled = await step._compile(ctx, SourceType.IMAGES)
+
+    assert compiled is not None
+    assert ai.providers == [None]
+
+
+@pytest.fixture()
+def fake_ocr(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+    """Stands in for Tesseract, reading each image's name as its text. Returns the images read, in order."""
+    read: list[Path] = []
+
+    def image_to_text(path: Path, languages: str = "eng", timeout: int = 60) -> str:
+        read.append(path)
+        return "" if path.stem.startswith("blank") else f"text of {path.stem}"
+
+    monkeypatch.setattr(ocr, "image_to_text", image_to_text)
+    return read
+
+
+@pytest.mark.asyncio
+async def test_ocr_reads_every_image_when_the_image_providers_fail(tmp_path: Path, fake_ocr: list[Path]):
+    images = [tmp_path / "page-1.jpg", tmp_path / "page-2.jpg"]
+    ai = StubImageAI(fallback_provider=None, image_provider_fails=True, ocr_fallback_active=True)
+    ctx = StubImageContext(ai, images)
+    step = CompileSourceStep(compilers=[ImageCompiler, FallbackImageCompiler, OCRImageCompiler])
+
+    compiled = await step._compile(ctx, SourceType.IMAGES)
+
+    assert compiled is not None
+    assert fake_ocr == images
+    assert ai.providers == [None]
+    assert compiled.content.startswith(OCR_PREAMBLE)
+    assert compiled.content.index("text of page-1") < compiled.content.index("text of page-2")
+    assert "## Photo 2" in compiled.content
+    assert ctx.progress[-1] == OCRImageCompiler.progress_key
+
+
+@pytest.mark.asyncio
+async def test_ocr_is_used_without_any_image_provider(tmp_path: Path, fake_ocr: list[Path]):
+    ai = StubImageAI(fallback_provider=None, image_provider_fails=False, image_provider=None, ocr_fallback_active=True)
+    ctx = StubImageContext(ai, [tmp_path / "recipe.jpg"])
+    step = CompileSourceStep(compilers=[ImageCompiler, FallbackImageCompiler, OCRImageCompiler])
+
+    compiled = await step._compile(ctx, SourceType.IMAGES)
+
+    assert compiled is not None
+    # no AI provider was asked to read the images
+    assert ai.providers == []
+    assert compiled.content == f"{OCR_PREAMBLE}\n\ntext of recipe"
+    assert ctx.progress == [OCRImageCompiler.progress_key]
+
+
+@pytest.mark.asyncio
+async def test_ocr_is_not_used_when_an_image_provider_succeeds(tmp_path: Path, fake_ocr: list[Path]):
+    ai = StubImageAI(fallback_provider=None, image_provider_fails=False, ocr_fallback_active=True)
+    ctx = StubImageContext(ai, [tmp_path / "recipe.jpg"])
+    step = CompileSourceStep(compilers=[ImageCompiler, FallbackImageCompiler, OCRImageCompiler])
+
+    compiled = await step._compile(ctx, SourceType.IMAGES)
+
+    assert compiled is not None
+    assert fake_ocr == []
+
+
+@pytest.mark.asyncio
+async def test_ocr_is_skipped_when_not_active(tmp_path: Path, fake_ocr: list[Path]):
+    ai = StubImageAI(fallback_provider=None, image_provider_fails=True, ocr_fallback_active=False)
+    ctx = StubImageContext(ai, [tmp_path / "recipe.jpg"])
+    step = CompileSourceStep(compilers=[ImageCompiler, FallbackImageCompiler, OCRImageCompiler])
+
+    assert await step._compile(ctx, SourceType.IMAGES) is None
+    assert fake_ocr == []
+
+
+@pytest.mark.asyncio
+async def test_ocr_that_finds_no_text_hands_over(tmp_path: Path, fake_ocr: list[Path]):
+    ai = StubImageAI(fallback_provider=None, image_provider_fails=True, ocr_fallback_active=True)
+    ctx = StubImageContext(ai, [tmp_path / "blank-1.jpg", tmp_path / "blank-2.jpg"])
+    step = CompileSourceStep(compilers=[ImageCompiler, FallbackImageCompiler, OCRImageCompiler])
+
+    assert await step._compile(ctx, SourceType.IMAGES) is None
+    assert len(fake_ocr) == 2
 
 
 class StubTranslator:
